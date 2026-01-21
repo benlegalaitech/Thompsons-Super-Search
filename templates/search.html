@@ -9,9 +9,10 @@
 
     <div class="search-section">
         <form class="search-form" id="searchForm">
-            <input type="text" name="q" id="searchInput" placeholder="Enter search term..." autocomplete="off">
+            <input type="text" name="q" id="searchInput" placeholder="Enter search terms (e.g. Ford Confidential)..." autocomplete="off">
             <button type="submit" class="btn btn-primary">Search</button>
         </form>
+        <p class="search-hint">Multiple words = AND search. Use "quotes" for exact phrases.</p>
     </div>
 
     <div id="results">
@@ -86,10 +87,12 @@ function renderResults(data) {
     `;
 
     for (const result of data.results) {
+        // Don't double-encode - filepath may contain slashes we need to preserve
+        const pdfUrl = `/pdf/${result.filepath}#page=${result.page}`;
         html += `
             <div class="result-item">
                 <div class="result-header">
-                    <span class="result-filename">${escapeHtml(result.filename)}</span>
+                    <a href="${pdfUrl}" target="_blank" class="result-filename" title="Click to open PDF at page ${result.page}">${escapeHtml(result.filename)}</a>
                     <span class="result-page">Page ${result.page}</span>
                 </div>
                 <div class="result-path">${escapeHtml(result.filepath)}</div>
@@ -101,11 +104,11 @@ function renderResults(data) {
     html += '</div>';
 
     // Pagination
-    if (data.page > 1 || data.has_more) {
+    if (data.total_pages > 1) {
         html += `
             <div class="pagination">
                 <button class="btn btn-secondary" ${data.page <= 1 ? 'disabled' : ''} onclick="prevPage()">Previous</button>
-                <span class="page-info">Page ${data.page}</span>
+                <span class="page-info">Page ${data.page} of ${data.total_pages}</span>
                 <button class="btn btn-secondary" ${!data.has_more ? 'disabled' : ''} onclick="nextPage()">Next</button>
             </div>
         `;

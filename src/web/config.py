@@ -17,5 +17,9 @@ class Config:
     SESSION_TYPE = 'filesystem'
     PERMANENT_SESSION_LIFETIME = timedelta(hours=1)
 
-    # Index location
+    # Index location (extracted text JSON files)
     INDEX_FOLDER = os.environ.get('INDEX_FOLDER', './index')
+
+    # Source folder for PDFs (for serving files to browser)
+    # Can be set via environment variable or loaded from config.json
+    SOURCE_FOLDER = os.environ.get('SOURCE_FOLDER', '')

@@ -3,7 +3,7 @@
 import os
 import json
 import re
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, current_app, send_file, abort
 from .auth import login_required, check_password, authenticate_user, logout_user
 
 main = Blueprint('main', __name__)
@@ -55,8 +55,38 @@ def load_index():
     return _index, _metadata
 
 
+def parse_search_terms(query):
+    """Parse search query into individual terms.
+
+    Supports:
+    - Multiple words: 'Ford Confidential' -> ['ford', 'confidential'] (AND search)
+    - Quoted phrases: '"exact phrase"' -> ['exact phrase'] (exact match)
+    """
+    terms = []
+    query = query.strip()
+
+    # Extract quoted phrases first
+    quoted_pattern = r'"([^"]+)"'
+    quoted_matches = re.findall(quoted_pattern, query)
+    terms.extend([m.lower() for m in quoted_matches])
+
+    # Remove quoted phrases from query
+    remaining = re.sub(quoted_pattern, '', query).strip()
+
+    # Split remaining by whitespace
+    if remaining:
+        words = remaining.split()
+        terms.extend([w.lower() for w in words if w])
+
+    return terms
+
+
 def search_index(query, page=1, per_page=20):
-    """Search the index for matching documents."""
+    """Search the index for matching documents.
+
+    Smart search: Multiple words are treated as AND search.
+    Use quotes for exact phrase matching: "Ford Confidential"
+    """
     index, metadata = load_index()
 
     if not query or not query.strip():
@@ -66,10 +96,22 @@ def search_index(query, page=1, per_page=20):
             'documents': 0,
             'results': [],
             'page': page,
+            'total_pages': 0,
             'has_more': False
         }
 
-    query_lower = query.lower().strip()
+    search_terms = parse_search_terms(query)
+    if not search_terms:
+        return {
+            'query': query,
+            'total_matches': 0,
+            'documents': 0,
+            'results': [],
+            'page': page,
+            'total_pages': 0,
+            'has_more': False
+        }
+
     results = []
     seen_docs = set()
 
@@ -80,11 +122,15 @@ def search_index(query, page=1, per_page=20):
         for page_info in doc.get('pages', []):
             page_num = page_info.get('page_num', 0)
             text = page_info.get('text', '')
+            text_lower = text.lower()
 
-            if query_lower in text.lower():
-                # Extract context around the match
-                context = extract_context(text, query_lower)
-                match_count = text.lower().count(query_lower)
+            # Check if ALL search terms are present (AND search)
+            if all(term in text_lower for term in search_terms):
+                # Extract context around the first matching term
+                context = extract_context(text, search_terms[0])
+
+                # Count total matches across all terms
+                match_count = sum(text_lower.count(term) for term in search_terms)
 
                 results.append({
                     'filename': filename,
@@ -100,6 +146,7 @@ def search_index(query, page=1, per_page=20):
 
     # Pagination
     total_matches = len(results)
+    total_pages = (total_matches + per_page - 1) // per_page  # Ceiling division
     start_idx = (page - 1) * per_page
     end_idx = start_idx + per_page
     paginated_results = results[start_idx:end_idx]
@@ -110,6 +157,7 @@ def search_index(query, page=1, per_page=20):
         'documents': len(seen_docs),
         'results': paginated_results,
         'page': page,
+        'total_pages': total_pages,
         'has_more': end_idx < total_matches
     }
 
@@ -137,13 +185,16 @@ def extract_context(text, query, context_chars=100):
     return snippet
 
 
-def highlight_matches(text, query):
-    """Highlight query matches in text (case-insensitive)."""
-    if not query:
+def highlight_matches(text, search_terms):
+    """Highlight all search terms in text (case-insensitive)."""
+    if not search_terms:
         return text
 
-    pattern = re.compile(re.escape(query), re.IGNORECASE)
-    return pattern.sub(lambda m: f'<mark>{m.group()}</mark>', text)
+    for term in search_terms:
+        pattern = re.compile(re.escape(term), re.IGNORECASE)
+        text = pattern.sub(lambda m: f'<mark>{m.group()}</mark>', text)
+
+    return text
 
 
 # Routes
@@ -186,9 +237,10 @@ def api_search():
 
     results = search_index(query, page=page)
 
-    # Highlight matches in context
+    # Highlight matches in context (using parsed search terms)
+    search_terms = parse_search_terms(query)
     for result in results['results']:
-        result['context'] = highlight_matches(result['context'], query)
+        result['context'] = highlight_matches(result['context'], search_terms)
 
     return jsonify(results)
 
@@ -199,3 +251,28 @@ def api_stats():
     """Get index statistics."""
     _, metadata = load_index()
     return jsonify(metadata)
+
+
+@main.route('/pdf/<path:filepath>')
+@login_required
+def serve_pdf(filepath):
+    """Serve a PDF file from the source folder."""
+    source_folder = current_app.config.get('SOURCE_FOLDER', '')
+    current_app.logger.info(f"PDF request: filepath={filepath!r}, source_folder={source_folder!r}")
+
+    if not source_folder:
+        current_app.logger.error("SOURCE_FOLDER not configured")
+        abort(404, 'Source folder not configured')
+
+    # Construct full path and ensure it's within source folder (security)
+    full_path = os.path.normpath(os.path.join(source_folder, filepath))
+    current_app.logger.info(f"Full path: {full_path!r}, exists={os.path.exists(full_path)}")
+
+    if not full_path.startswith(os.path.normpath(source_folder)):
+        abort(403, 'Access denied')
+
+    if not os.path.exists(full_path):
+        current_app.logger.error(f"File not found: {full_path}")
+        abort(404, 'File not found')
+
+    return send_file(full_path, mimetype='application/pdf')
