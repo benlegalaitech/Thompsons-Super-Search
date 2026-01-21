@@ -1,0 +1,13 @@
+# PDF text extraction
+pdfplumber>=0.10.0
+
+# Web framework
+flask>=3.0.0
+flask-wtf>=1.2.0
+gunicorn>=21.0.0
+
+# Progress bar for extraction
+tqdm>=4.66.0
+
+# Environment variables
+python-dotenv>=1.0.0

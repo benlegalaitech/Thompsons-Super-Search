@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv
+ENV
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Local config
+config.json
+.env
+
+# Documentation (not needed in container)
+*.md
+!README.md
+
+# Tests
+tests/
+.pytest_cache
+.coverage
+htmlcov
+
+# Development files
+*.log
+.DS_Store
+Thumbs.db
+
+# Don't ignore index - we need it in the container
+# !index/

@@ -1,0 +1,6 @@
+{
+  "source_folder": "/path/to/your/pdfs",
+  "index_folder": "./index",
+  "file_extensions": [".pdf"],
+  "port": 5000
+}

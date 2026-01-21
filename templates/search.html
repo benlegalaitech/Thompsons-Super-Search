@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}Search - Super Search{% endblock %}
+
+{% block content %}
+<div class="search-container">
+    <h1>Document Search</h1>
+    <p class="subtitle">Search across {{ metadata.total_docs | default(0) }} documents ({{ metadata.total_pages | default(0) }} pages)</p>
+
+    <div class="search-section">
+        <form class="search-form" id="searchForm">
+            <input type="text" name="q" id="searchInput" placeholder="Enter search term..." autocomplete="off">
+            <button type="submit" class="btn btn-primary">Search</button>
+        </form>
+    </div>
+
+    <div id="results">
+        <div class="empty-state">
+            <h2>Enter a search term</h2>
+            <p>Type keywords to search across all documents</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const searchForm = document.getElementById('searchForm');
+const searchInput = document.getElementById('searchInput');
+const resultsDiv = document.getElementById('results');
+let currentPage = 1;
+let currentQuery = '';
+
+searchForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    currentPage = 1;
+    currentQuery = searchInput.value.trim();
+    if (currentQuery) {
+        performSearch();
+    }
+});
+
+function performSearch() {
+    if (!currentQuery) return;
+
+    resultsDiv.innerHTML = `
+        <div class="loading">
+            <div class="loading-spinner"></div>
+            <p>Searching...</p>
+        </div>
+    `;
+
+    fetch(`/api/search?q=${encodeURIComponent(currentQuery)}&page=${currentPage}`)
+        .then(response => response.json())
+        .then(data => {
+            renderResults(data);
+        })
+        .catch(error => {
+            resultsDiv.innerHTML = `
+                <div class="no-results">
+                    <h3>Error</h3>
+                    <p>An error occurred while searching. Please try again.</p>
+                </div>
+            `;
+            console.error('Search error:', error);
+        });
+}
+
+function renderResults(data) {
+    if (data.total_matches === 0) {
+        resultsDiv.innerHTML = `
+            <div class="no-results">
+                <h3>No results found</h3>
+                <p>No documents match "${escapeHtml(data.query)}"</p>
+            </div>
+        `;
+        return;
+    }
+
+    let html = `
+        <div class="stats-bar">
+            <span>Found <span class="count">${data.total_matches}</span> matches across <span class="count">${data.documents}</span> documents</span>
+            <span>Page ${data.page}</span>
+        </div>
+        <div class="results-section">
+    `;
+
+    for (const result of data.results) {
+        html += `
+            <div class="result-item">
+                <div class="result-header">
+                    <span class="result-filename">${escapeHtml(result.filename)}</span>
+                    <span class="result-page">Page ${result.page}</span>
+                </div>
+                <div class="result-path">${escapeHtml(result.filepath)}</div>
+                <div class="result-context">${result.context}</div>
+            </div>
+        `;
+    }
+
+    html += '</div>';
+
+    // Pagination
+    if (data.page > 1 || data.has_more) {
+        html += `
+            <div class="pagination">
+                <button class="btn btn-secondary" ${data.page <= 1 ? 'disabled' : ''} onclick="prevPage()">Previous</button>
+                <span class="page-info">Page ${data.page}</span>
+                <button class="btn btn-secondary" ${!data.has_more ? 'disabled' : ''} onclick="nextPage()">Next</button>
+            </div>
+        `;
+    }
+
+    resultsDiv.innerHTML = html;
+}
+
+function prevPage() {
+    if (currentPage > 1) {
+        currentPage--;
+        performSearch();
+    }
+}
+
+function nextPage() {
+    currentPage++;
+    performSearch();
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Focus search input on load
+searchInput.focus();
+</script>
+{% endblock %}
