@@ -14,11 +14,9 @@ COPY static/ ./static/
 COPY templates/ ./templates/
 COPY run_web.py .
 
-# Copy pre-extracted index (must be built locally first)
-COPY index/ ./index/
-
-# Create temp directories
-RUN mkdir -p /tmp/flask-session
+# Index is downloaded from Azure Blob Storage at runtime
+# Create directories for index and temp files
+RUN mkdir -p /tmp/flask-session /app/index
 
 # Verify the app can be imported
 RUN python -c "from src.web import create_app; app = create_app(); print('App created successfully')"

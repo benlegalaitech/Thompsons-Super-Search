@@ -23,3 +23,9 @@ class Config:
     # Source folder for PDFs (for serving files to browser)
     # Can be set via environment variable or loaded from config.json
     SOURCE_FOLDER = os.environ.get('SOURCE_FOLDER', '')
+
+    # Azure Blob Storage (optional - if configured, PDFs are served from blob)
+    AZURE_STORAGE_ACCOUNT = os.environ.get('AZURE_STORAGE_ACCOUNT', '')
+    AZURE_STORAGE_KEY = os.environ.get('AZURE_STORAGE_KEY', '')
+    AZURE_PDF_CONTAINER = os.environ.get('AZURE_PDF_CONTAINER', 'pdfs')
+    AZURE_INDEX_CONTAINER = os.environ.get('AZURE_INDEX_CONTAINER', 'index')

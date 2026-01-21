@@ -5,6 +5,7 @@ import json
 import re
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, current_app, send_file, abort
 from .auth import login_required, check_password, authenticate_user, logout_user
+from .blob_storage import is_blob_storage_enabled, generate_pdf_sas_url, check_blob_exists, download_index_from_blob
 
 main = Blueprint('main', __name__)
 
@@ -28,6 +29,10 @@ def load_index():
     index_folder = get_index_folder()
     texts_folder = os.path.join(index_folder, 'texts')
     metadata_file = os.path.join(index_folder, 'metadata.json')
+
+    # If blob storage is enabled and index doesn't exist locally, download it
+    if is_blob_storage_enabled() and not os.path.exists(metadata_file):
+        download_index_from_blob(index_folder)
 
     _index = []
     _metadata = {'total_docs': 0, 'total_pages': 0}
@@ -256,9 +261,22 @@ def api_stats():
 @main.route('/pdf/<path:filepath>')
 @login_required
 def serve_pdf(filepath):
-    """Serve a PDF file from the source folder."""
+    """Serve a PDF file - from blob storage or local source folder."""
+
+    # If blob storage is configured, redirect to SAS URL
+    if is_blob_storage_enabled():
+        current_app.logger.info(f"PDF request (blob): filepath={filepath!r}")
+
+        if not check_blob_exists(filepath):
+            current_app.logger.error(f"File not found in blob storage: {filepath}")
+            abort(404, 'File not found in blob storage')
+
+        sas_url = generate_pdf_sas_url(filepath, expiry_hours=1)
+        return redirect(sas_url)
+
+    # Fallback to local file serving (original logic)
     source_folder = current_app.config.get('SOURCE_FOLDER', '')
-    current_app.logger.info(f"PDF request: filepath={filepath!r}, source_folder={source_folder!r}")
+    current_app.logger.info(f"PDF request (local): filepath={filepath!r}, source_folder={source_folder!r}")
 
     if not source_folder:
         current_app.logger.error("SOURCE_FOLDER not configured")
