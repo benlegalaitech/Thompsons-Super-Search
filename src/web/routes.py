@@ -5,7 +5,7 @@ import json
 import re
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, current_app, send_file, abort
 from .auth import login_required, check_password, authenticate_user, logout_user
-from .blob_storage import is_blob_storage_enabled, generate_pdf_sas_url, check_blob_exists, download_index_from_blob
+from .blob_storage import is_blob_storage_enabled, generate_pdf_sas_url, check_blob_exists, download_index_from_blob, is_index_download_complete, is_index_downloading
 
 main = Blueprint('main', __name__)
 
@@ -30,9 +30,11 @@ def load_index():
     texts_folder = os.path.join(index_folder, 'texts')
     metadata_file = os.path.join(index_folder, 'metadata.json')
 
-    # If blob storage is enabled and index doesn't exist locally, download it
+    # If blob storage is enabled and index doesn't exist locally, wait for background download
     if is_blob_storage_enabled() and not os.path.exists(metadata_file):
-        download_index_from_blob(index_folder)
+        # Background download should already be started, just return empty for now
+        if is_index_downloading() and not is_index_download_complete():
+            return [], {'total_docs': 0, 'total_pages': 0, 'loading': True}
 
     _index = []
     _metadata = {'total_docs': 0, 'total_pages': 0}
@@ -256,6 +258,12 @@ def api_stats():
     """Get index statistics."""
     _, metadata = load_index()
     return jsonify(metadata)
+
+
+@main.route('/health')
+def health():
+    """Health check endpoint for container orchestration."""
+    return jsonify({'status': 'ok'})
 
 
 @main.route('/pdf/<path:filepath>')

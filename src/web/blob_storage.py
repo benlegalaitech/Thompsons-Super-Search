@@ -1,6 +1,7 @@
 """Azure Blob Storage integration for PDF serving and index loading."""
 
 import os
+import threading
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
@@ -11,6 +12,11 @@ STORAGE_ACCOUNT_NAME = os.environ.get('AZURE_STORAGE_ACCOUNT', '')
 STORAGE_ACCOUNT_KEY = os.environ.get('AZURE_STORAGE_KEY', '')
 PDF_CONTAINER = os.environ.get('AZURE_PDF_CONTAINER', 'pdfs')
 INDEX_CONTAINER = os.environ.get('AZURE_INDEX_CONTAINER', 'index')
+
+# Background download state
+_download_in_progress = False
+_download_complete = False
+_download_thread = None
 
 
 def is_blob_storage_enabled():
@@ -68,12 +74,26 @@ def _download_single_blob(args):
         return False
 
 
+def is_index_download_complete():
+    """Check if index download has completed."""
+    return _download_complete
+
+
+def is_index_downloading():
+    """Check if index download is in progress."""
+    return _download_in_progress
+
+
 def download_index_from_blob(local_index_folder: str) -> bool:
     """Download index files from blob storage to local folder (parallel)."""
+    global _download_in_progress, _download_complete
+
     if not is_blob_storage_enabled():
         print("Blob storage not configured, skipping index download")
+        _download_complete = True  # Mark as complete so app doesn't wait
         return False
 
+    _download_in_progress = True
     print(f"Downloading index from blob storage to {local_index_folder}...")
 
     os.makedirs(local_index_folder, exist_ok=True)
@@ -87,6 +107,8 @@ def download_index_from_blob(local_index_folder: str) -> bool:
         blob_list = list(container_client.list_blobs())
         if not blob_list:
             print("No index files found in blob storage")
+            _download_in_progress = False
+            _download_complete = True
             return False
 
         print(f"Found {len(blob_list)} index files, downloading in parallel...")
@@ -102,7 +124,34 @@ def download_index_from_blob(local_index_folder: str) -> bool:
                     downloaded += 1
 
         print(f"Downloaded {downloaded} index files from blob storage")
+        _download_in_progress = False
+        _download_complete = True
         return True
     except Exception as e:
         print(f"Error downloading index from blob: {e}")
+        _download_in_progress = False
+        _download_complete = True
         return False
+
+
+def start_background_index_download(local_index_folder: str):
+    """Start downloading index in background thread."""
+    global _download_thread, _download_complete
+
+    metadata_file = os.path.join(local_index_folder, 'metadata.json')
+    if os.path.exists(metadata_file):
+        print("Index already exists locally, skipping download")
+        _download_complete = True
+        return
+
+    if _download_thread is not None and _download_thread.is_alive():
+        print("Index download already in progress")
+        return
+
+    print("Starting background index download...")
+    _download_thread = threading.Thread(
+        target=download_index_from_blob,
+        args=(local_index_folder,),
+        daemon=True
+    )
+    _download_thread.start()

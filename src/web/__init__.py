@@ -27,4 +27,10 @@ def create_app():
     from .routes import main
     app.register_blueprint(main)
 
+    # Start background index download (non-blocking)
+    from .blob_storage import is_blob_storage_enabled, start_background_index_download
+    if is_blob_storage_enabled():
+        index_folder = app.config.get('INDEX_FOLDER', './index')
+        start_background_index_download(index_folder)
+
     return app
