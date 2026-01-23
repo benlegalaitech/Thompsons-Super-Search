@@ -2,18 +2,22 @@
 
 import os
 import json
+import sys
 from flask import Flask
 from .config import Config
 
 
 def create_app():
     """Create and configure the Flask application."""
+    print("Creating Flask application...", file=sys.stderr, flush=True)
+
     app = Flask(
         __name__,
         template_folder='../../templates',
         static_folder='../../static'
     )
     app.config.from_object(Config)
+    print("Flask config loaded", file=sys.stderr, flush=True)
 
     # Load SOURCE_FOLDER from config.json if not set via environment
     if not app.config.get('SOURCE_FOLDER'):
@@ -26,11 +30,19 @@ def create_app():
     # Register blueprints
     from .routes import main
     app.register_blueprint(main)
+    print("Blueprints registered", file=sys.stderr, flush=True)
 
     # Start background index download (non-blocking)
-    from .blob_storage import is_blob_storage_enabled, start_background_index_download
-    if is_blob_storage_enabled():
-        index_folder = app.config.get('INDEX_FOLDER', './index')
-        start_background_index_download(index_folder)
+    try:
+        from .blob_storage import is_blob_storage_enabled, start_background_index_download
+        if is_blob_storage_enabled():
+            print("Blob storage enabled, starting background download...", file=sys.stderr, flush=True)
+            index_folder = app.config.get('INDEX_FOLDER', './index')
+            start_background_index_download(index_folder)
+        else:
+            print("Blob storage not enabled", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"Error starting background download: {e}", file=sys.stderr, flush=True)
 
+    print("App creation complete", file=sys.stderr, flush=True)
     return app
