@@ -46,3 +46,5 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+scripts/copy_onedrive_to_blob.py
+.claude/settings.local.json
