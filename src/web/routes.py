@@ -30,11 +30,10 @@ def load_index():
     texts_folder = os.path.join(index_folder, 'texts')
     metadata_file = os.path.join(index_folder, 'metadata.json')
 
-    # If blob storage is enabled and index doesn't exist locally, wait for background download
-    if is_blob_storage_enabled() and not os.path.exists(metadata_file):
-        # Background download should already be started, just return empty for now
-        if is_index_downloading() and not is_index_download_complete():
-            return [], {'total_docs': 0, 'total_pages': 0, 'loading': True}
+    # If blob storage is enabled and index is still downloading, wait
+    if is_blob_storage_enabled() and is_index_downloading() and not is_index_download_complete():
+        # Background download in progress, return loading state
+        return [], {'total_docs': 0, 'total_pages': 0, 'loading': True}
 
     _index = []
     _metadata = {'total_docs': 0, 'total_pages': 0}
