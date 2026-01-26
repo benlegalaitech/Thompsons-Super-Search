@@ -262,7 +262,11 @@ def api_stats():
 @main.route('/health')
 def health():
     """Health check endpoint for container orchestration."""
-    return jsonify({'status': 'ok'})
+    return jsonify({
+        'status': 'ok',
+        'index_downloading': is_index_downloading(),
+        'index_ready': is_index_download_complete()
+    })
 
 
 @main.route('/pdf/<path:filepath>')
