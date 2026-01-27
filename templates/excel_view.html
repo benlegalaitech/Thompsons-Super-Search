@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}{{ filename }} - Sheet: {{ active_sheet }} - Super Search{% endblock %}
+
+{% block content %}
+<div class="excel-viewer">
+    <div class="excel-header">
+        <div class="excel-title">
+            <h1>{{ filename }}</h1>
+            {% if query %}
+            <p class="excel-match-info">
+                {{ match_count }} match{{ 'es' if match_count != 1 else '' }} for "{{ query }}" in sheet "{{ active_sheet }}"
+                {% if not full_mode and total_rows > 0 %}
+                (showing rows near matches)
+                {% endif %}
+            </p>
+            {% endif %}
+        </div>
+        <div class="excel-actions">
+            {% if not full_mode %}
+            <a href="{{ url_for('main.excel_view', filepath=filepath, sheet=active_sheet, q=query, full='1') }}" class="btn btn-secondary">View Entire Sheet</a>
+            {% endif %}
+            <a href="{{ url_for('main.serve_file', filepath=filepath) }}" class="btn btn-primary">Download File</a>
+        </div>
+    </div>
+
+    {% if sheet_names|length > 1 %}
+    <div class="excel-sheet-tabs">
+        {% for sname in sheet_names %}
+        <a href="{{ url_for('main.excel_view', filepath=filepath, sheet=sname, q=query) }}"
+           class="sheet-tab {% if sname == active_sheet %}active{% endif %}">
+            {{ sname }}
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="excel-table-container">
+        {{ table_html }}
+    </div>
+
+    <div class="excel-footer">
+        <a href="{{ url_for('main.index') }}" class="btn btn-secondary">Back to Search</a>
+    </div>
+</div>
+{% endblock %}

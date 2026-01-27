@@ -1,6 +1,8 @@
 {
   "source_folder": "/path/to/your/pdfs",
+  "excel_source_folder": "/path/to/your/excel-native-files",
   "index_folder": "./index",
   "file_extensions": [".pdf"],
+  "excel_extensions": [".xls", ".xlsx", ".xlsm", ".xlsb"],
   "port": 5000
 }

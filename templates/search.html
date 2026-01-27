@@ -5,13 +5,19 @@
 {% block content %}
 <div class="search-container">
     <h1>Document Search</h1>
-    <p class="subtitle">Search across {{ metadata.total_docs | default(0) }} documents ({{ metadata.total_pages | default(0) }} pages)</p>
+    <p class="subtitle">Search across {{ metadata.total_docs | default(0) }} documents &mdash; {{ metadata.get('pdf_docs', 0) }} PDFs, {{ metadata.get('excel_docs', 0) }} Excel files</p>
 
     <div class="search-section">
         <form class="search-form" id="searchForm">
             <input type="text" name="q" id="searchInput" placeholder="Enter search terms (e.g. Ford Confidential)..." autocomplete="off">
             <button type="submit" class="btn btn-primary">Search</button>
         </form>
+        <div class="filter-bar">
+            <span class="filter-label">Filter:</span>
+            <button class="filter-btn active" data-type="" id="filterAll">All</button>
+            <button class="filter-btn" data-type="pdf" id="filterPdf"><span class="file-type-badge pdf" style="margin-right:4px;font-size:0.7em;">PDF</span>PDFs</button>
+            <button class="filter-btn" data-type="excel" id="filterExcel"><span class="file-type-badge excel" style="margin-right:4px;font-size:0.7em;">XLSX</span>Excel</button>
+        </div>
         <p class="search-hint">Multiple words = AND search. Use "quotes" for exact phrases.</p>
     </div>
 
@@ -31,6 +37,7 @@ const searchInput = document.getElementById('searchInput');
 const resultsDiv = document.getElementById('results');
 let currentPage = 1;
 let currentQuery = '';
+let currentFileType = '';
 
 searchForm.addEventListener('submit', function(e) {
     e.preventDefault();
@@ -39,6 +46,19 @@ searchForm.addEventListener('submit', function(e) {
     if (currentQuery) {
         performSearch();
     }
+});
+
+// File type filter buttons
+document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        currentFileType = this.dataset.type;
+        if (currentQuery) {
+            currentPage = 1;
+            performSearch();
+        }
+    });
 });
 
 function performSearch() {
@@ -51,7 +71,8 @@ function performSearch() {
         </div>
     `;
 
-    fetch(`/api/search?q=${encodeURIComponent(currentQuery)}&page=${currentPage}`)
+    const typeParam = currentFileType ? `&type=${currentFileType}` : '';
+    fetch(`/api/search?q=${encodeURIComponent(currentQuery)}&page=${currentPage}${typeParam}`)
         .then(response => response.json())
         .then(data => {
             renderResults(data);
@@ -87,13 +108,29 @@ function renderResults(data) {
     `;
 
     for (const result of data.results) {
-        // Don't double-encode - filepath may contain slashes we need to preserve
-        const pdfUrl = `/pdf/${result.filepath}#page=${result.page}`;
+        const isExcel = result.file_type === 'excel';
+        let fileUrl, linkTitle, locationLabel, typeBadge;
+
+        if (isExcel) {
+            fileUrl = `/excel-view/${result.filepath}?sheet=${encodeURIComponent(result.sheet_name || '')}&q=${encodeURIComponent(data.query)}`;
+            linkTitle = `Click to view Excel sheet: ${result.sheet_name || 'Sheet ' + result.page}`;
+            locationLabel = result.sheet_name ? `Sheet: ${escapeHtml(result.sheet_name)}` : `Sheet ${result.page}`;
+            typeBadge = '<span class="file-type-badge excel">XLSX</span>';
+        } else {
+            fileUrl = `/pdf/${result.filepath}#page=${result.page}`;
+            linkTitle = `Click to open PDF at page ${result.page}`;
+            locationLabel = `Page ${result.page}`;
+            typeBadge = '<span class="file-type-badge pdf">PDF</span>';
+        }
+
         html += `
             <div class="result-item">
                 <div class="result-header">
-                    <a href="${pdfUrl}" target="_blank" class="result-filename" title="Click to open PDF at page ${result.page}">${escapeHtml(result.filename)}</a>
-                    <span class="result-page">Page ${result.page}</span>
+                    <div class="result-title-row">
+                        ${typeBadge}
+                        <a href="${fileUrl}" target="_blank" class="result-filename" title="${linkTitle}">${escapeHtml(result.filename)}</a>
+                    </div>
+                    <span class="result-page">${locationLabel}</span>
                 </div>
                 <div class="result-path">${escapeHtml(result.filepath)}</div>
                 <div class="result-context">${result.context}</div>

@@ -19,13 +19,15 @@ def create_app():
     app.config.from_object(Config)
     print("Flask config loaded", file=sys.stderr, flush=True)
 
-    # Load SOURCE_FOLDER from config.json if not set via environment
-    if not app.config.get('SOURCE_FOLDER'):
-        config_path = os.path.join(os.path.dirname(__file__), '../../config.json')
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                file_config = json.load(f)
+    # Load source folders from config.json if not set via environment
+    config_path = os.path.join(os.path.dirname(__file__), '../../config.json')
+    if os.path.exists(config_path):
+        with open(config_path, 'r', encoding='utf-8') as f:
+            file_config = json.load(f)
+            if not app.config.get('SOURCE_FOLDER'):
                 app.config['SOURCE_FOLDER'] = file_config.get('source_folder', '')
+            if not app.config.get('EXCEL_SOURCE_FOLDER'):
+                app.config['EXCEL_SOURCE_FOLDER'] = file_config.get('excel_source_folder', '')
 
     # Register blueprints
     from .routes import main

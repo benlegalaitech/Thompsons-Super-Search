@@ -1,6 +1,11 @@
 # PDF text extraction
 pdfplumber>=0.10.0
 
+# Excel text extraction
+openpyxl>=3.1.0
+xlrd>=2.0.0
+pyxlsb>=1.0.10
+
 # Web framework
 flask>=3.0.0
 flask-wtf>=1.2.0
