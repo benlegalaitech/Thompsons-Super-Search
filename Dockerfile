@@ -24,4 +24,4 @@ RUN python -c "from src.web import create_app; app = create_app(); print('App cr
 EXPOSE 5000
 
 # Use production WSGI server
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120", "--log-level", "info", "run_web:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--timeout", "120", "--log-level", "info", "run_web:app"]
