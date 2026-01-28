@@ -48,3 +48,9 @@ Thumbs.db
 htmlcov/
 scripts/copy_onedrive_to_blob.py
 .claude/settings.local.json
+
+# Azure config with secrets
+containerapp-update.yaml
+
+# Windows artifacts
+nul

@@ -30,6 +30,15 @@ body {
     font-weight: 600;
 }
 
+.nav-brand-link {
+    color: white;
+    text-decoration: none;
+}
+
+.nav-brand-link:hover {
+    opacity: 0.9;
+}
+
 .nav-links a {
     color: white;
     text-decoration: none;
@@ -466,6 +475,16 @@ body {
 .file-type-badge.excel {
     background: #dcfce7;
     color: #16a34a;
+}
+
+.file-type-badge.word {
+    background: #dbeafe;
+    color: #2563eb;
+}
+
+.file-type-badge.email {
+    background: #e0e7ff;
+    color: #4f46e5;
 }
 
 .result-title-row {

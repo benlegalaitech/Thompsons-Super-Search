@@ -109,14 +109,24 @@ function renderResults(data) {
     `;
 
     for (const result of data.results) {
-        const isExcel = result.file_type === 'excel';
+        const fileType = result.file_type || 'pdf';
         let fileUrl, linkTitle, locationLabel, typeBadge;
 
-        if (isExcel) {
+        if (fileType === 'excel') {
             fileUrl = `/p/${PROJECT_ID}/excel-view/${result.filepath}?sheet=${encodeURIComponent(result.sheet_name || '')}&q=${encodeURIComponent(data.query)}`;
             linkTitle = `Click to view Excel sheet: ${result.sheet_name || 'Sheet ' + result.page}`;
             locationLabel = result.sheet_name ? `Sheet: ${escapeHtml(result.sheet_name)}` : `Sheet ${result.page}`;
             typeBadge = '<span class="file-type-badge excel">XLSX</span>';
+        } else if (fileType === 'word') {
+            fileUrl = `/p/${PROJECT_ID}/doc-view/${result.filepath}?q=${encodeURIComponent(data.query)}`;
+            linkTitle = `Click to view document`;
+            locationLabel = 'Document';
+            typeBadge = '<span class="file-type-badge word">DOC</span>';
+        } else if (fileType === 'email') {
+            fileUrl = `/p/${PROJECT_ID}/doc-view/${result.filepath}?q=${encodeURIComponent(data.query)}`;
+            linkTitle = `Click to view email`;
+            locationLabel = 'Email';
+            typeBadge = '<span class="file-type-badge email">EMAIL</span>';
         } else {
             fileUrl = `/p/${PROJECT_ID}/pdf/${result.filepath}#page=${result.page}`;
             linkTitle = `Click to open PDF at page ${result.page}`;

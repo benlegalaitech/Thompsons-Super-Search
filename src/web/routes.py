@@ -8,6 +8,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from .auth import login_required, check_password, authenticate_user, logout_user
 from .blob_storage import is_blob_storage_enabled, generate_pdf_sas_url, check_blob_exists, download_index_from_blob, is_index_download_complete, is_index_downloading, get_blob_service_client, PDF_CONTAINER
 from .projects import get_project, get_all_projects
+from . import get_index_folder
 
 main = Blueprint('main', __name__)
 
@@ -27,7 +28,8 @@ def load_project_index(project_id):
     if project is None:
         abort(404, 'Project not found')
 
-    index_folder = project.get('index_folder', f'./index/{project_id}')
+    config_folder = project.get('index_folder', f'./index/{project_id}')
+    index_folder = get_index_folder(project_id, config_folder)
     texts_folder = os.path.join(index_folder, 'texts')
     metadata_file = os.path.join(index_folder, 'metadata.json')
 
@@ -359,6 +361,77 @@ def project_serve_pdf(project_id, filepath):
         abort(404, 'File not found')
 
     return send_file(full_path, mimetype='application/pdf')
+
+
+@main.route('/p/<project_id>/doc-view/<path:filepath>')
+@login_required
+def project_doc_view(project_id, filepath):
+    """View a Word document or email as rendered text."""
+    project = _get_project_or_404(project_id)
+    query = request.args.get('q', '')
+
+    # Find the corresponding index file to get the extracted text
+    index_folder = project.get('index_folder', f'./index/{project_id}')
+    filename = os.path.basename(filepath)
+
+    # Try to find the text file in the index
+    text_file = os.path.join(index_folder, 'texts', f'{filename}.json')
+
+    if not os.path.exists(text_file):
+        # If local file doesn't exist and blob storage is enabled, try to get from loaded index
+        index, _ = load_project_index(project_id)
+        doc_data = None
+        for doc in index:
+            if doc.get('path', '').replace('\\', '/') == filepath.replace('\\', '/'):
+                doc_data = doc
+                break
+
+        if not doc_data:
+            abort(404, 'Document not found in index')
+
+        # Get content from the loaded index
+        pages = doc_data.get('pages', [])
+        content = '\n\n'.join(p.get('text', '') for p in pages)
+        file_type = doc_data.get('file_type', 'word')
+    else:
+        # Load from local file
+        with open(text_file, 'r', encoding='utf-8') as f:
+            doc_data = json.load(f)
+        pages = doc_data.get('pages', [])
+        content = '\n\n'.join(p.get('text', '') for p in pages)
+        file_type = doc_data.get('file_type', 'word')
+
+    # Highlight search terms if provided
+    if query:
+        search_terms = parse_search_terms(query)
+        for term in search_terms:
+            import re
+            pattern = re.compile(re.escape(term), re.IGNORECASE)
+            content = pattern.sub(lambda m: f'<mark>{m.group()}</mark>', content)
+
+    # Escape HTML except for our mark tags
+    content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    content = content.replace('&lt;mark&gt;', '<mark>').replace('&lt;/mark&gt;', '</mark>')
+
+    # Extract email metadata if available
+    email_meta = None
+    if file_type == 'email':
+        email_meta = {
+            'subject': doc_data.get('subject', ''),
+            'sender': doc_data.get('sender', ''),
+            'to': doc_data.get('to', ''),
+            'date': doc_data.get('date', '')
+        }
+
+    return render_template('doc_viewer.html',
+        filename=filename,
+        filepath=filepath,
+        content=content,
+        file_type=file_type,
+        email_meta=email_meta,
+        project_id=project_id,
+        query=query
+    )
 
 
 def _resolve_excel_path(filepath, project):

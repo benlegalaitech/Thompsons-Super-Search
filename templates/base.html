@@ -10,7 +10,7 @@
 <body>
     <nav class="navbar">
         <div class="nav-brand">
-            Super Search
+            <a href="{{ url_for('main.project_picker') }}" class="nav-brand-link">Super Search</a>
             {% if project is defined and project %}
             <span class="nav-separator">/</span>
             <span class="nav-project">{{ project.name }}</span>

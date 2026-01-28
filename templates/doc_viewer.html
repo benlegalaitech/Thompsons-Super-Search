@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ filename }} - Document Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        .doc-viewer-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .doc-header {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+        }
+        .doc-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #212529;
+            margin: 0 0 8px 0;
+            word-break: break-word;
+        }
+        .doc-meta {
+            font-size: 0.875rem;
+            color: #6c757d;
+        }
+        .doc-meta span {
+            margin-right: 15px;
+        }
+        .file-type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .file-type-badge.word {
+            background: #2b579a;
+            color: white;
+        }
+        .file-type-badge.email {
+            background: #0078d4;
+            color: white;
+        }
+        .doc-content {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 30px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 0.95rem;
+            color: #212529;
+        }
+        .doc-content mark {
+            background: #fff3cd;
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+        .email-header {
+            background: #e7f3ff;
+            border: 1px solid #b8daff;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+        }
+        .email-header-row {
+            margin-bottom: 5px;
+        }
+        .email-header-label {
+            font-weight: 600;
+            color: #004085;
+            display: inline-block;
+            width: 80px;
+        }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 15px;
+            color: #0d6efd;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .download-btn {
+            display: inline-block;
+            padding: 8px 16px;
+            background: #6c757d;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            margin-left: 10px;
+        }
+        .download-btn:hover {
+            background: #5a6268;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="doc-viewer-container">
+        <a href="{{ url_for('main.project_search', project_id=project_id) }}{% if query %}?q={{ query }}{% endif %}" class="back-link">&larr; Back to search</a>
+
+        <div class="doc-header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                {% if file_type == 'email' %}
+                <span class="file-type-badge email">EMAIL</span>
+                {% else %}
+                <span class="file-type-badge word">DOC</span>
+                {% endif %}
+                <h1 class="doc-title">{{ filename }}</h1>
+            </div>
+            <div class="doc-meta">
+                <span>{{ filepath }}</span>
+                <a href="{{ url_for('main.project_serve_pdf', project_id=project_id, filepath=filepath) }}" class="download-btn">Download Original</a>
+            </div>
+        </div>
+
+        {% if file_type == 'email' and email_meta %}
+        <div class="email-header">
+            {% if email_meta.subject %}
+            <div class="email-header-row"><span class="email-header-label">Subject:</span> {{ email_meta.subject }}</div>
+            {% endif %}
+            {% if email_meta.sender %}
+            <div class="email-header-row"><span class="email-header-label">From:</span> {{ email_meta.sender }}</div>
+            {% endif %}
+            {% if email_meta.to %}
+            <div class="email-header-row"><span class="email-header-label">To:</span> {{ email_meta.to }}</div>
+            {% endif %}
+            {% if email_meta.date %}
+            <div class="email-header-row"><span class="email-header-label">Date:</span> {{ email_meta.date }}</div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="doc-content">{{ content|safe }}</div>
+    </div>
+</body>
+</html>
