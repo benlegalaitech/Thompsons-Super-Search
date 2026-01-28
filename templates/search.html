@@ -9,23 +9,58 @@
 
     <div class="search-section">
         <form class="search-form" id="searchForm">
-            <input type="text" name="q" id="searchInput" placeholder="Enter search terms..." autocomplete="off">
+            <input type="text" name="q" id="searchInput" placeholder="Ask a question or enter search terms..." autocomplete="off">
             <button type="submit" class="btn btn-primary">Search</button>
         </form>
+
+        <!-- Search Mode Toggle -->
+        <div class="search-mode-toggle" id="searchModeToggle">
+            <button class="mode-btn active" data-mode="smart" id="modeSmartBtn">
+                <span class="mode-icon">&#x1F9E0;</span> Smart Search
+            </button>
+            <button class="mode-btn" data-mode="keyword" id="modeKeywordBtn">
+                <span class="mode-icon">&#x1F524;</span> Keyword Search
+            </button>
+        </div>
+
         <div class="filter-bar">
             <span class="filter-label">Filter:</span>
             <button class="filter-btn active" data-type="" id="filterAll">All</button>
             <button class="filter-btn" data-type="pdf" id="filterPdf"><span class="file-type-badge pdf" style="margin-right:4px;font-size:0.7em;">PDF</span>PDFs</button>
             <button class="filter-btn" data-type="excel" id="filterExcel"><span class="file-type-badge excel" style="margin-right:4px;font-size:0.7em;">XLSX</span>Excel</button>
         </div>
-        <p class="search-hint">Multiple words = AND search. Use "quotes" for exact phrases.</p>
+
+        <p class="search-hint" id="searchHint">
+            <span id="smartHint">Ask natural language questions like "documents about asbestos mentioning John"</span>
+            <span id="keywordHint" style="display:none">Multiple words = AND search. Use "quotes" for exact phrases.</span>
+        </p>
+    </div>
+
+    <!-- Query Interpretation Box (shown after smart search) -->
+    <div class="interpretation-box" id="interpretationBox" style="display:none">
+        <div class="interpretation-header">
+            <strong>Understood as:</strong>
+            <span id="interpretationText"></span>
+        </div>
+        <details class="interpretation-details">
+            <summary>Search details</summary>
+            <div id="queryPlanDetails"></div>
+        </details>
     </div>
 
     <div id="results">
+        {% if metadata.loading %}
+        <div class="loading">
+            <div class="loading-spinner"></div>
+            <p>{{ metadata.loading_message | default('Loading index...') }}</p>
+            <p class="search-hint">This page will auto-refresh when ready.</p>
+        </div>
+        {% else %}
         <div class="empty-state">
             <h2>Enter a search term</h2>
-            <p>Type keywords to search across all documents</p>
+            <p>Type keywords or ask a question to search across all documents</p>
         </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}
@@ -33,12 +68,100 @@
 {% block scripts %}
 <script>
 const PROJECT_ID = '{{ project.id }}';
-const searchForm = document.getElementById('searchForm');
-const searchInput = document.getElementById('searchInput');
-const resultsDiv = document.getElementById('results');
+const INDEX_LOADING = {{ 'true' if metadata.loading else 'false' }};
+
+// Search configuration
+let searchConfig = {
+    smart_search_enabled: true,
+    keyword_search_enabled: true,
+    default_mode: 'smart'
+};
+
+// Current state
+let currentSearchMode = 'smart';
 let currentPage = 1;
 let currentQuery = '';
 let currentFileType = '';
+
+// Auto-refresh when index is loading
+if (INDEX_LOADING) {
+    setTimeout(() => {
+        fetch(`/p/${PROJECT_ID}/api/stats`)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.loading) {
+                    window.location.reload();
+                } else {
+                    setTimeout(() => window.location.reload(), 3000);
+                }
+            })
+            .catch(() => setTimeout(() => window.location.reload(), 3000));
+    }, 3000);
+}
+
+// Load search configuration
+fetch(`/p/${PROJECT_ID}/api/search-config`)
+    .then(r => r.json())
+    .then(config => {
+        searchConfig = config;
+        currentSearchMode = config.default_mode;
+        updateModeUI();
+
+        // Hide toggle if only one mode is available
+        if (!config.smart_search_enabled || !config.keyword_search_enabled) {
+            document.getElementById('searchModeToggle').style.display = 'none';
+        }
+    })
+    .catch(() => {
+        // Default to keyword if config fails
+        currentSearchMode = 'keyword';
+        updateModeUI();
+    });
+
+const searchForm = document.getElementById('searchForm');
+const searchInput = document.getElementById('searchInput');
+const resultsDiv = document.getElementById('results');
+const interpretationBox = document.getElementById('interpretationBox');
+const interpretationText = document.getElementById('interpretationText');
+const queryPlanDetails = document.getElementById('queryPlanDetails');
+
+// Search mode toggle
+document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const mode = this.dataset.mode;
+        if (mode === 'smart' && !searchConfig.smart_search_enabled) return;
+        if (mode === 'keyword' && !searchConfig.keyword_search_enabled) return;
+
+        currentSearchMode = mode;
+        updateModeUI();
+
+        // Re-search if there's a query
+        if (currentQuery) {
+            currentPage = 1;
+            performSearch();
+        }
+    });
+});
+
+function updateModeUI() {
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    const activeBtn = document.querySelector(`.mode-btn[data-mode="${currentSearchMode}"]`);
+    if (activeBtn) activeBtn.classList.add('active');
+
+    // Update hint text
+    document.getElementById('smartHint').style.display = currentSearchMode === 'smart' ? 'inline' : 'none';
+    document.getElementById('keywordHint').style.display = currentSearchMode === 'keyword' ? 'inline' : 'none';
+
+    // Update placeholder
+    if (currentSearchMode === 'smart') {
+        searchInput.placeholder = 'Ask a question or enter search terms...';
+    } else {
+        searchInput.placeholder = 'Enter search terms...';
+    }
+
+    // Hide interpretation box when switching modes
+    interpretationBox.style.display = 'none';
+}
 
 searchForm.addEventListener('submit', function(e) {
     e.preventDefault();
@@ -65,6 +188,109 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 function performSearch() {
     if (!currentQuery) return;
 
+    // Hide interpretation box during search
+    interpretationBox.style.display = 'none';
+
+    if (currentSearchMode === 'smart') {
+        performSmartSearch();
+    } else {
+        performKeywordSearch();
+    }
+}
+
+function performSmartSearch() {
+    resultsDiv.innerHTML = `
+        <div class="loading">
+            <div class="loading-spinner"></div>
+            <p>Analyzing your query...</p>
+            <p class="search-hint">Using AI to understand your search</p>
+        </div>
+    `;
+
+    fetch(`/p/${PROJECT_ID}/api/smart-search`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            query: currentQuery,
+            page: currentPage,
+            type: currentFileType
+        })
+    })
+    .then(response => response.json().then(data => ({ ok: response.ok, data })))
+    .then(({ ok, data }) => {
+        if (!ok) {
+            // Handle error response
+            let errorHtml = `
+                <div class="search-error">
+                    <h3>Search Error</h3>
+                    <p>${escapeHtml(data.error || 'An error occurred')}</p>
+            `;
+
+            if (data.fallback_available) {
+                errorHtml += `
+                    <p><button class="btn btn-secondary" onclick="switchToKeywordAndSearch()">Try Keyword Search</button></p>
+                `;
+            }
+
+            errorHtml += '</div>';
+            resultsDiv.innerHTML = errorHtml;
+            return;
+        }
+
+        // Show interpretation
+        if (data.interpretation) {
+            interpretationText.textContent = data.interpretation;
+            interpretationBox.style.display = 'block';
+
+            // Show query plan details
+            if (data.query_plan) {
+                let detailsHtml = '<ul>';
+                if (data.query_plan.required_terms?.length) {
+                    detailsHtml += `<li><strong>Required terms:</strong> ${data.query_plan.required_terms.join(', ')}</li>`;
+                }
+                if (data.query_plan.optional_terms?.length) {
+                    detailsHtml += `<li><strong>Related terms:</strong> ${data.query_plan.optional_terms.join(', ')}</li>`;
+                }
+                if (data.query_plan.person_names?.length) {
+                    detailsHtml += `<li><strong>Person names:</strong> ${data.query_plan.person_names.join(', ')}</li>`;
+                }
+                if (data.query_plan.locations?.length) {
+                    detailsHtml += `<li><strong>Locations:</strong> ${data.query_plan.locations.join(', ')}</li>`;
+                }
+                detailsHtml += `<li><strong>Confidence:</strong> ${Math.round(data.query_plan.confidence * 100)}%</li>`;
+                if (data.llm_latency_ms) {
+                    detailsHtml += `<li><strong>Query time:</strong> ${data.llm_latency_ms}ms${data.cache_hit ? ' (cached)' : ''}</li>`;
+                }
+                detailsHtml += '</ul>';
+                queryPlanDetails.innerHTML = detailsHtml;
+            }
+        }
+
+        // Show warning if present
+        if (data.warning) {
+            interpretationBox.classList.add('has-warning');
+            interpretationText.innerHTML += ` <span class="warning-badge">${escapeHtml(data.warning)}</span>`;
+        } else {
+            interpretationBox.classList.remove('has-warning');
+        }
+
+        renderResults(data);
+    })
+    .catch(error => {
+        console.error('Smart search error:', error);
+        resultsDiv.innerHTML = `
+            <div class="search-error">
+                <h3>Search Error</h3>
+                <p>An error occurred while searching. Please try again.</p>
+                <p><button class="btn btn-secondary" onclick="switchToKeywordAndSearch()">Try Keyword Search</button></p>
+            </div>
+        `;
+    });
+}
+
+function performKeywordSearch() {
     resultsDiv.innerHTML = `
         <div class="loading">
             <div class="loading-spinner"></div>
@@ -89,20 +315,36 @@ function performSearch() {
         });
 }
 
+function switchToKeywordAndSearch() {
+    currentSearchMode = 'keyword';
+    updateModeUI();
+    performSearch();
+}
+
 function renderResults(data) {
     if (data.total_matches === 0) {
-        resultsDiv.innerHTML = `
+        let noResultsHtml = `
             <div class="no-results">
                 <h3>No results found</h3>
-                <p>No documents match "${escapeHtml(data.query)}"</p>
-            </div>
+                <p>No documents match your search</p>
         `;
+
+        // Suggest switching modes if no results
+        if (currentSearchMode === 'smart' && searchConfig.keyword_search_enabled) {
+            noResultsHtml += `<p><button class="btn btn-secondary" onclick="switchToKeywordAndSearch()">Try Keyword Search</button></p>`;
+        } else if (currentSearchMode === 'keyword' && searchConfig.smart_search_enabled) {
+            noResultsHtml += `<p><button class="btn btn-secondary" onclick="switchToSmartAndSearch()">Try Smart Search</button></p>`;
+        }
+
+        noResultsHtml += '</div>';
+        resultsDiv.innerHTML = noResultsHtml;
         return;
     }
 
     let html = `
         <div class="stats-bar">
             <span>Found <span class="count">${data.total_matches}</span> matches across <span class="count">${data.documents}</span> documents</span>
+            <span class="search-mode-indicator">${currentSearchMode === 'smart' ? 'Smart Search' : 'Keyword Search'}</span>
             <span>Page ${data.page}</span>
         </div>
         <div class="results-section">
@@ -112,18 +354,21 @@ function renderResults(data) {
         const fileType = result.file_type || 'pdf';
         let fileUrl, linkTitle, locationLabel, typeBadge;
 
+        // Build the query string - use original query for highlighting
+        const queryForHighlight = encodeURIComponent(currentQuery);
+
         if (fileType === 'excel') {
-            fileUrl = `/p/${PROJECT_ID}/excel-view/${result.filepath}?sheet=${encodeURIComponent(result.sheet_name || '')}&q=${encodeURIComponent(data.query)}`;
+            fileUrl = `/p/${PROJECT_ID}/excel-view/${result.filepath}?sheet=${encodeURIComponent(result.sheet_name || '')}&q=${queryForHighlight}`;
             linkTitle = `Click to view Excel sheet: ${result.sheet_name || 'Sheet ' + result.page}`;
             locationLabel = result.sheet_name ? `Sheet: ${escapeHtml(result.sheet_name)}` : `Sheet ${result.page}`;
             typeBadge = '<span class="file-type-badge excel">XLSX</span>';
         } else if (fileType === 'word') {
-            fileUrl = `/p/${PROJECT_ID}/doc-view/${result.filepath}?q=${encodeURIComponent(data.query)}`;
+            fileUrl = `/p/${PROJECT_ID}/doc-view/${result.filepath}?q=${queryForHighlight}`;
             linkTitle = `Click to view document`;
             locationLabel = 'Document';
             typeBadge = '<span class="file-type-badge word">DOC</span>';
         } else if (fileType === 'email') {
-            fileUrl = `/p/${PROJECT_ID}/doc-view/${result.filepath}?q=${encodeURIComponent(data.query)}`;
+            fileUrl = `/p/${PROJECT_ID}/doc-view/${result.filepath}?q=${queryForHighlight}`;
             linkTitle = `Click to view email`;
             locationLabel = 'Email';
             typeBadge = '<span class="file-type-badge email">EMAIL</span>';
@@ -163,6 +408,12 @@ function renderResults(data) {
     }
 
     resultsDiv.innerHTML = html;
+}
+
+function switchToSmartAndSearch() {
+    currentSearchMode = 'smart';
+    updateModeUI();
+    performSearch();
 }
 
 function prevPage() {

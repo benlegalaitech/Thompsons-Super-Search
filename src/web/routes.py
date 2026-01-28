@@ -1,20 +1,29 @@
 """Search routes and logic."""
 
 import os
+import sys
 import json
 import re
+import threading
 from markupsafe import Markup
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, current_app, send_file, abort
 from .auth import login_required, check_password, authenticate_user, logout_user
 from .blob_storage import is_blob_storage_enabled, generate_pdf_sas_url, check_blob_exists, download_index_from_blob, is_index_download_complete, is_index_downloading, get_blob_service_client, PDF_CONTAINER
 from .projects import get_project, get_all_projects
 from . import get_index_folder
+from .llm_query import (
+    parse_query_with_llm, QueryPlan, LLMError, LLMTimeoutError, LLMValidationError,
+    is_smart_search_enabled, is_keyword_search_enabled
+)
+from .query_logger import log_search
 
 main = Blueprint('main', __name__)
 
 # Per-project index storage (loaded on first request per project)
 _indexes = {}    # {project_id: [doc, doc, ...]}
 _metadatas = {}  # {project_id: {total_docs: N, ...}}
+_preload_states = {}  # {project_id: {'in_progress': bool, 'complete': bool}}
+_preload_lock = threading.Lock()
 
 
 def load_project_index(project_id):
@@ -33,9 +42,13 @@ def load_project_index(project_id):
     texts_folder = os.path.join(index_folder, 'texts')
     metadata_file = os.path.join(index_folder, 'metadata.json')
 
-    # If blob storage is enabled and index is still downloading, wait
+    # If blob storage is enabled and index is still downloading, show loading
     if is_blob_storage_enabled() and is_index_downloading(project_id) and not is_index_download_complete(project_id):
-        return [], {'total_docs': 0, 'total_pages': 0, 'loading': True}
+        return [], {'total_docs': 0, 'total_pages': 0, 'loading': True, 'loading_message': 'Downloading index files...'}
+
+    # If index is being pre-loaded in background, show loading
+    if is_index_preloading(project_id):
+        return [], {'total_docs': 0, 'total_pages': 0, 'loading': True, 'loading_message': 'Loading documents into memory...'}
 
     index = []
     metadata = {'total_docs': 0, 'total_pages': 0}
@@ -67,6 +80,94 @@ def load_project_index(project_id):
     _metadatas[project_id] = metadata
 
     return index, metadata
+
+
+def is_index_preloading(project_id):
+    """Check if index is currently being pre-loaded."""
+    with _preload_lock:
+        state = _preload_states.get(project_id, {})
+        return state.get('in_progress', False)
+
+
+def is_index_preload_complete(project_id):
+    """Check if index pre-loading has completed."""
+    with _preload_lock:
+        state = _preload_states.get(project_id, {})
+        return state.get('complete', False)
+
+
+def _preload_single_index(project_id, index_folder):
+    """Pre-load a single project's index (runs in background thread)."""
+    global _indexes, _metadatas
+
+    with _preload_lock:
+        _preload_states[project_id] = {'in_progress': True, 'complete': False}
+
+    try:
+        texts_folder = os.path.join(index_folder, 'texts')
+        metadata_file = os.path.join(index_folder, 'metadata.json')
+
+        index = []
+        metadata = {'total_docs': 0, 'total_pages': 0}
+
+        # Load metadata if exists
+        if os.path.exists(metadata_file):
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
+        # Load all text files
+        if os.path.exists(texts_folder):
+            files = [f for f in os.listdir(texts_folder) if f.endswith('.json')]
+            print(f"Pre-loading {len(files)} documents for project '{project_id}'...", file=sys.stderr, flush=True)
+
+            for i, filename in enumerate(files):
+                filepath = os.path.join(texts_folder, filename)
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        doc = json.load(f)
+                        if 'file_type' not in doc:
+                            doc['file_type'] = 'pdf'
+                        index.append(doc)
+                except Exception as e:
+                    print(f"Error loading {filepath}: {e}", file=sys.stderr, flush=True)
+
+                # Progress logging for large indices
+                if (i + 1) % 5000 == 0:
+                    print(f"  Pre-loaded {i + 1}/{len(files)} documents for '{project_id}'...", file=sys.stderr, flush=True)
+
+        metadata['total_docs'] = len(index)
+        metadata['total_pages'] = sum(len(doc.get('pages', [])) for doc in index)
+
+        _indexes[project_id] = index
+        _metadatas[project_id] = metadata
+
+        print(f"Pre-load complete for project '{project_id}': {len(index)} documents", file=sys.stderr, flush=True)
+
+    except Exception as e:
+        print(f"Error pre-loading index for '{project_id}': {e}", file=sys.stderr, flush=True)
+    finally:
+        with _preload_lock:
+            _preload_states[project_id] = {'in_progress': False, 'complete': True}
+
+
+def start_index_preload(project_id, index_folder):
+    """Start pre-loading an index in a background thread."""
+    # Skip if already loaded or loading
+    if project_id in _indexes:
+        print(f"Index for '{project_id}' already in memory, skipping pre-load", file=sys.stderr, flush=True)
+        return
+
+    with _preload_lock:
+        if _preload_states.get(project_id, {}).get('in_progress', False):
+            print(f"Index for '{project_id}' already pre-loading, skipping", file=sys.stderr, flush=True)
+            return
+
+    thread = threading.Thread(
+        target=_preload_single_index,
+        args=(project_id, index_folder),
+        daemon=True
+    )
+    thread.start()
 
 
 def parse_search_terms(query):
@@ -218,6 +319,112 @@ def highlight_matches(text, search_terms):
     return text
 
 
+def smart_search_index(query_plan, project_id, page=1, per_page=20, file_type_filter=None):
+    """Search the index using a QueryPlan from LLM parsing.
+
+    Uses OR logic for optional terms and weighted scoring.
+    """
+    index, metadata = load_project_index(project_id)
+
+    if not query_plan.required_terms:
+        return {
+            'query': '',
+            'total_matches': 0,
+            'documents': 0,
+            'results': [],
+            'page': page,
+            'total_pages': 0,
+            'has_more': False
+        }
+
+    results = []
+    seen_docs = set()
+
+    # Combine all search terms for matching
+    required_terms = query_plan.required_terms
+    optional_terms = query_plan.optional_terms
+    person_names = query_plan.person_names
+    locations = query_plan.locations
+
+    for doc in index:
+        # Apply file type filter
+        doc_type = doc.get('file_type', 'pdf')
+        if file_type_filter and doc_type != file_type_filter:
+            continue
+        filename = doc.get('filename', '')
+        filepath = doc.get('path', '')
+
+        for page_info in doc.get('pages', []):
+            page_num = page_info.get('page_num', 0)
+            text = page_info.get('text', '')
+            text_lower = text.lower()
+
+            # Check if ALL required terms are present
+            if not all(term in text_lower for term in required_terms):
+                continue
+
+            # Calculate relevance score
+            score = 0.0
+
+            # Required terms (base score)
+            for term in required_terms:
+                count = text_lower.count(term)
+                score += min(count * 10, 30)  # Cap per term
+
+            # Optional/synonym terms (bonus)
+            for term in optional_terms:
+                if term in text_lower:
+                    score += 5
+
+            # Person name matches (high value)
+            for name in person_names:
+                if name in text_lower:
+                    score += 15
+
+            # Location matches
+            for loc in locations:
+                if loc in text_lower:
+                    score += 10
+
+            # Normalize to 0-100
+            score = min(score, 100)
+
+            # Extract context around the first required term
+            context = extract_context(text, required_terms[0])
+
+            results.append({
+                'filename': filename,
+                'filepath': filepath,
+                'page': page_num,
+                'sheet_name': page_info.get('sheet_name', ''),
+                'file_type': doc.get('file_type', 'pdf'),
+                'context': context,
+                'match_count': int(score),  # Use score as match count for sorting
+                'relevance_score': score
+            })
+            seen_docs.add(filename)
+
+    # Sort by relevance score (highest first)
+    results.sort(key=lambda x: x['relevance_score'], reverse=True)
+
+    # Pagination
+    total_matches = len(results)
+    total_pages = (total_matches + per_page - 1) // per_page
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_results = results[start_idx:end_idx]
+
+    return {
+        'query': ' '.join(required_terms),
+        'total_matches': total_matches,
+        'documents': len(seen_docs),
+        'results': paginated_results,
+        'page': page,
+        'total_pages': total_pages,
+        'has_more': end_idx < total_matches
+    }
+
+
 def _get_project_or_404(project_id):
     """Validate project_id and return project config, or abort 404."""
     project = get_project(project_id)
@@ -282,7 +489,7 @@ def project_search(project_id):
 @main.route('/p/<project_id>/api/search')
 @login_required
 def project_api_search(project_id):
-    """Search API endpoint scoped to a project."""
+    """Keyword search API endpoint scoped to a project."""
     _get_project_or_404(project_id)
     query = request.args.get('q', '')
     page = request.args.get('page', 1, type=int)
@@ -295,7 +502,188 @@ def project_api_search(project_id):
     for result in results['results']:
         result['context'] = highlight_matches(result['context'], search_terms)
 
+    # Log the search
+    log_search(
+        project_id=project_id,
+        query_text=query,
+        search_mode='keyword',
+        result_count=results['total_matches']
+    )
+
     return jsonify(results)
+
+
+@main.route('/p/<project_id>/api/smart-search', methods=['POST'])
+@login_required
+def project_api_smart_search(project_id):
+    """Smart search API endpoint using LLM query parsing."""
+    import time
+
+    project = _get_project_or_404(project_id)
+    data = request.get_json() or {}
+    query = data.get('query', '').strip()
+    page = data.get('page', 1)
+    file_type = data.get('type', '')
+
+    if not query:
+        return jsonify({
+            'error': 'Please enter a search query',
+            'query': '',
+            'total_matches': 0,
+            'documents': 0,
+            'results': [],
+            'page': 1,
+            'total_pages': 0,
+            'has_more': False
+        })
+
+    # Check if smart search is enabled
+    if not is_smart_search_enabled():
+        return jsonify({
+            'error': 'Smart search is not enabled',
+            'fallback_available': is_keyword_search_enabled()
+        }), 503
+
+    start_time = time.time()
+    llm_latency_ms = None
+    error_message = None
+    query_plan = None
+    cache_hit = False
+
+    try:
+        # Parse the query with LLM
+        llm_start = time.time()
+        query_plan = parse_query_with_llm(
+            query,
+            project_id=project_id,
+            project_description=project.get('description', '')
+        )
+        llm_latency_ms = int((time.time() - llm_start) * 1000)
+
+        # Check if it was a cache hit (latency < 50ms suggests cache)
+        cache_hit = llm_latency_ms < 50
+
+        # Perform the search
+        results = smart_search_index(
+            query_plan,
+            project_id=project_id,
+            page=page,
+            file_type_filter=file_type or None
+        )
+
+        # Highlight matches in context
+        all_terms = (
+            query_plan.required_terms +
+            query_plan.optional_terms +
+            query_plan.person_names +
+            query_plan.locations
+        )
+        for result in results['results']:
+            result['context'] = highlight_matches(result['context'], all_terms)
+
+        # Add smart search metadata to response
+        results['smart_search'] = True
+        results['interpretation'] = query_plan.interpretation
+        results['query_plan'] = {
+            'required_terms': query_plan.required_terms,
+            'optional_terms': query_plan.optional_terms,
+            'person_names': query_plan.person_names,
+            'locations': query_plan.locations,
+            'confidence': query_plan.confidence
+        }
+        results['llm_latency_ms'] = llm_latency_ms
+        results['cache_hit'] = cache_hit
+
+        # Add confidence warning if low
+        if query_plan.confidence < 0.7:
+            results['warning'] = 'Results may not be precise - query was ambiguous'
+
+        # Log the search
+        log_search(
+            project_id=project_id,
+            query_text=query,
+            search_mode='smart',
+            query_plan=query_plan.to_dict(),
+            interpretation=query_plan.interpretation,
+            result_count=results['total_matches'],
+            llm_latency_ms=llm_latency_ms,
+            cache_hit=cache_hit
+        )
+
+        return jsonify(results)
+
+    except LLMTimeoutError as e:
+        error_message = str(e)
+        log_search(
+            project_id=project_id,
+            query_text=query,
+            search_mode='smart',
+            error_message=error_message,
+            llm_latency_ms=llm_latency_ms
+        )
+        return jsonify({
+            'error': 'Search is taking longer than expected. Please try again.',
+            'error_type': 'timeout',
+            'fallback_available': is_keyword_search_enabled()
+        }), 504
+
+    except LLMValidationError as e:
+        error_message = str(e)
+        log_search(
+            project_id=project_id,
+            query_text=query,
+            search_mode='smart',
+            error_message=error_message,
+            llm_latency_ms=llm_latency_ms
+        )
+        return jsonify({
+            'error': f"Couldn't understand query: {e}. Try rephrasing.",
+            'error_type': 'validation',
+            'fallback_available': is_keyword_search_enabled()
+        }), 400
+
+    except LLMError as e:
+        error_message = str(e)
+        log_search(
+            project_id=project_id,
+            query_text=query,
+            search_mode='smart',
+            error_message=error_message,
+            llm_latency_ms=llm_latency_ms
+        )
+        return jsonify({
+            'error': 'Search service temporarily unavailable. Please try again.',
+            'error_type': 'service_error',
+            'fallback_available': is_keyword_search_enabled()
+        }), 503
+
+    except Exception as e:
+        error_message = str(e)
+        current_app.logger.error(f"Smart search error: {e}")
+        log_search(
+            project_id=project_id,
+            query_text=query,
+            search_mode='smart',
+            error_message=error_message,
+            llm_latency_ms=llm_latency_ms
+        )
+        return jsonify({
+            'error': 'An unexpected error occurred. Please try again.',
+            'error_type': 'unknown',
+            'fallback_available': is_keyword_search_enabled()
+        }), 500
+
+
+@main.route('/p/<project_id>/api/search-config')
+@login_required
+def project_search_config(project_id):
+    """Get search configuration for the frontend."""
+    _get_project_or_404(project_id)
+    return jsonify({
+        'smart_search_enabled': is_smart_search_enabled(),
+        'keyword_search_enabled': is_keyword_search_enabled(),
+        'default_mode': 'smart' if is_smart_search_enabled() else 'keyword'
+    })
 
 
 @main.route('/p/<project_id>/api/stats')
