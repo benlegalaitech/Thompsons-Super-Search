@@ -1,16 +1,36 @@
 """Simple password authentication for web interface."""
 
+import os
 from functools import wraps
 from flask import session, redirect, url_for, request, current_app
 
 
+def is_azure_ad_authenticated():
+    """Check if user is authenticated via Azure AD Easy Auth."""
+    # Easy Auth passes user info in X-MS-CLIENT-PRINCIPAL-NAME header
+    principal_name = request.headers.get('X-MS-CLIENT-PRINCIPAL-NAME', '')
+    return bool(principal_name)
+
+
+def get_azure_ad_user():
+    """Get the current user's email from Azure AD Easy Auth."""
+    return request.headers.get('X-MS-CLIENT-PRINCIPAL-NAME', '')
+
+
 def login_required(f):
-    """Decorator to require authentication."""
+    """Decorator to require authentication.
+
+    Supports both Azure AD Easy Auth and session-based auth.
+    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not session.get('authenticated'):
-            return redirect(url_for('main.login', next=request.url))
-        return f(*args, **kwargs)
+        # Check Azure AD Easy Auth first
+        if is_azure_ad_authenticated():
+            return f(*args, **kwargs)
+        # Fall back to session-based auth
+        if session.get('authenticated'):
+            return f(*args, **kwargs)
+        return redirect(url_for('main.login', next=request.url))
     return decorated_function
 
 
