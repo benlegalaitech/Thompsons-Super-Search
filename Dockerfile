@@ -13,6 +13,7 @@ COPY src/ ./src/
 COPY static/ ./static/
 COPY templates/ ./templates/
 COPY run_web.py .
+COPY config.prod.json ./config.json
 
 # Index is downloaded from Azure Blob Storage at runtime
 # Create directories for index and temp files

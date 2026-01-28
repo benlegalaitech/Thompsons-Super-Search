@@ -1,0 +1,25 @@
+{
+  "projects": [
+    {
+      "id": "ford",
+      "name": "Ford EOBD Case",
+      "description": "Production VOL001 - Scotland",
+      "source_folder": "",
+      "excel_source_folder": "",
+      "index_folder": "./index/ford",
+      "file_extensions": [".pdf"],
+      "excel_extensions": [".xls", ".xlsx", ".xlsm", ".xlsb"]
+    },
+    {
+      "id": "lung-disease",
+      "name": "Historical Lung & Disease Cases",
+      "description": "Historical lung and disease case documents",
+      "source_folder": "",
+      "excel_source_folder": "",
+      "index_folder": "./index/lung-disease",
+      "file_extensions": [".pdf"],
+      "excel_extensions": [".xls", ".xlsx", ".xlsm", ".xlsb"]
+    }
+  ],
+  "port": 5000
+}
