@@ -9,10 +9,19 @@
 </head>
 <body>
     <nav class="navbar">
-        <div class="nav-brand">Super Search</div>
+        <div class="nav-brand">
+            Super Search
+            {% if project is defined and project %}
+            <span class="nav-separator">/</span>
+            <span class="nav-project">{{ project.name }}</span>
+            {% endif %}
+        </div>
         {% if session.authenticated %}
         <div class="nav-links">
-            <a href="{{ url_for('main.index') }}">Search</a>
+            {% if project is defined and project %}
+            <a href="{{ url_for('main.project_picker') }}">Projects</a>
+            <a href="{{ url_for('main.project_search', project_id=project.id) }}">Search</a>
+            {% endif %}
             <a href="{{ url_for('main.logout') }}">Logout</a>
         </div>
         {% endif %}

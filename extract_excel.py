@@ -7,7 +7,7 @@ and saves as JSON for fast searching. Produces the same index format as
 extract.py (for PDFs), so both file types are searchable through the same engine.
 
 Usage:
-    python extract_excel.py                    # Run extraction using config.json
+    python extract_excel.py --project ford     # Extract for a specific project
     python extract_excel.py --source /path     # Override source folder
     python extract_excel.py --reindex          # Force re-extract all files
 """
@@ -354,8 +354,20 @@ def extract_all(source_folder, index_folder, reindex=False, extensions=None):
     print(f"Index saved to: {index_folder}")
 
 
+def resolve_project_config(config, project_id):
+    """Resolve source/index folders from a project entry in config.json."""
+    projects = config.get('projects', [])
+    for p in projects:
+        if p['id'] == project_id:
+            return p
+    print(f"Error: Project '{project_id}' not found in config.json")
+    print(f"Available projects: {[p['id'] for p in projects]}")
+    sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Extract text from Excel files for searching')
+    parser.add_argument('--project', help='Project ID (reads config from config.json projects array)')
     parser.add_argument('--source', help='Source folder containing Excel files (overrides config.json)')
     parser.add_argument('--index', help='Index folder for extracted text (overrides config.json)')
     parser.add_argument('--reindex', action='store_true', help='Force re-extract all files')
@@ -364,20 +376,29 @@ def main():
     # Load config
     config = load_config()
 
-    # Get settings (command line args override config)
-    source_folder = args.source or config.get('excel_source_folder')
-    index_folder = args.index or config.get('index_folder', './index')
-    extensions = config.get('excel_extensions', EXCEL_EXTENSIONS)
+    # Resolve settings from project config or flat config
+    if args.project:
+        project = resolve_project_config(config, args.project)
+        source_folder = args.source or project.get('excel_source_folder', '')
+        index_folder = args.index or project.get('index_folder', f'./index/{args.project}')
+        extensions = project.get('excel_extensions', EXCEL_EXTENSIONS)
+    else:
+        # Backward compat: flat config or --source/--index overrides
+        source_folder = args.source or config.get('excel_source_folder', '')
+        index_folder = args.index or config.get('index_folder', './index')
+        extensions = config.get('excel_extensions', EXCEL_EXTENSIONS)
 
     if not source_folder:
         print("Error: No Excel source folder specified.")
-        print("Set 'excel_source_folder' in config.json or use --source argument.")
+        print("Set 'excel_source_folder' in config.json or use --source/--project argument.")
         sys.exit(1)
 
     print(f"Source: {source_folder}")
     print(f"Index:  {index_folder}")
     print(f"Extensions: {extensions}")
     print(f"Reindex: {args.reindex}")
+    if args.project:
+        print(f"Project: {args.project}")
     print()
 
     extract_all(source_folder, index_folder, reindex=args.reindex, extensions=extensions)

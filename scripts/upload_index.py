@@ -12,7 +12,7 @@ except ImportError:
     sys.exit(1)
 
 
-def upload_index(storage_account: str, storage_key: str, index_folder: str, container: str = 'index'):
+def upload_index(storage_account: str, storage_key: str, index_folder: str, container: str = 'index', project_id: str = ''):
     """Upload all index files to blob storage."""
     account_url = f"https://{storage_account}.blob.core.windows.net"
     blob_service_client = BlobServiceClient(account_url=account_url, credential=storage_key)
@@ -35,7 +35,9 @@ def upload_index(storage_account: str, storage_key: str, index_folder: str, cont
 
     for file_path in index_path.rglob('*'):
         if file_path.is_file():
-            blob_name = str(file_path.relative_to(index_path)).replace('\\', '/')
+            relative = str(file_path.relative_to(index_path)).replace('\\', '/')
+            # Prefix with project_id if specified
+            blob_name = f"{project_id}/{relative}" if project_id else relative
             file_size = file_path.stat().st_size
 
             print(f"Uploading: {blob_name} ({file_size:,} bytes)")
@@ -53,7 +55,12 @@ def upload_index(storage_account: str, storage_key: str, index_folder: str, cont
 
 
 if __name__ == '__main__':
-    # Get configuration from environment or arguments
+    import argparse
+    parser = argparse.ArgumentParser(description='Upload index to Azure Blob Storage')
+    parser.add_argument('index_folder', nargs='?', default='./index', help='Index folder to upload')
+    parser.add_argument('--project', help='Project ID (prefixes blob names with project_id/)')
+    args = parser.parse_args()
+
     storage_account = os.environ.get('AZURE_STORAGE_ACCOUNT', 'thompsonstorage123')
     storage_key = os.environ.get('AZURE_STORAGE_KEY')
 
@@ -62,11 +69,10 @@ if __name__ == '__main__':
         print("Set it with: set AZURE_STORAGE_KEY=<your-key>")
         sys.exit(1)
 
-    # Get index folder from argument or default
-    index_folder = sys.argv[1] if len(sys.argv) > 1 else './index'
-
-    print(f"Uploading index from: {index_folder}")
+    print(f"Uploading index from: {args.index_folder}")
     print(f"To storage account: {storage_account}")
+    if args.project:
+        print(f"Project prefix: {args.project}/")
     print()
 
-    upload_index(storage_account, storage_key, index_folder)
+    upload_index(storage_account, storage_key, args.index_folder, project_id=args.project or '')

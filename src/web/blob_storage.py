@@ -14,10 +14,9 @@ STORAGE_ACCOUNT_KEY = os.environ.get('AZURE_STORAGE_KEY', '')
 PDF_CONTAINER = os.environ.get('AZURE_PDF_CONTAINER', 'pdfs')
 INDEX_CONTAINER = os.environ.get('AZURE_INDEX_CONTAINER', 'index')
 
-# Background download state
-_download_in_progress = False
-_download_complete = False
-_download_thread = None
+# Per-project download state: {project_id: {'in_progress': bool, 'complete': bool, 'thread': Thread}}
+_download_states = {}
+_download_lock = threading.Lock()
 
 
 def is_blob_storage_enabled():
@@ -62,10 +61,14 @@ def check_blob_exists(blob_path: str) -> bool:
 
 def _download_single_blob(args):
     """Download a single blob (for parallel execution)."""
-    container_client, blob_name, local_index_folder = args
+    container_client, blob_name, local_index_folder, strip_prefix = args
     try:
         blob_client = container_client.get_blob_client(blob_name)
-        local_path = os.path.join(local_index_folder, blob_name)
+        # Strip the project prefix from blob name for local path
+        local_name = blob_name
+        if strip_prefix and blob_name.startswith(strip_prefix):
+            local_name = blob_name[len(strip_prefix):]
+        local_path = os.path.join(local_index_folder, local_name)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, 'wb') as f:
             f.write(blob_client.download_blob().readall())
@@ -75,27 +78,33 @@ def _download_single_blob(args):
         return False
 
 
-def is_index_download_complete():
-    """Check if index download has completed."""
-    return _download_complete
+def is_index_download_complete(project_id='default'):
+    """Check if index download has completed for a project."""
+    state = _download_states.get(project_id, {})
+    return state.get('complete', False)
 
 
-def is_index_downloading():
-    """Check if index download is in progress."""
-    return _download_in_progress
+def is_index_downloading(project_id='default'):
+    """Check if index download is in progress for a project."""
+    state = _download_states.get(project_id, {})
+    return state.get('in_progress', False)
 
 
-def download_index_from_blob(local_index_folder: str) -> bool:
-    """Download index files from blob storage to local folder (parallel)."""
-    global _download_in_progress, _download_complete
+def download_index_from_blob(local_index_folder: str, project_id: str = 'default', blob_prefix: str = '') -> bool:
+    """Download index files from blob storage to local folder (parallel).
+
+    If blob_prefix is given, only downloads blobs matching that prefix
+    and strips the prefix from local file paths.
+    """
+    with _download_lock:
+        _download_states[project_id] = {'in_progress': True, 'complete': False, 'thread': None}
 
     if not is_blob_storage_enabled():
         print("Blob storage not configured, skipping index download", file=sys.stderr, flush=True)
-        _download_complete = True  # Mark as complete so app doesn't wait
+        _download_states[project_id] = {'in_progress': False, 'complete': True, 'thread': None}
         return False
 
-    _download_in_progress = True
-    print(f"Downloading index from blob storage to {local_index_folder}...", file=sys.stderr, flush=True)
+    print(f"Downloading index for project '{project_id}' from blob storage to {local_index_folder}...", file=sys.stderr, flush=True)
 
     os.makedirs(local_index_folder, exist_ok=True)
     texts_folder = os.path.join(local_index_folder, 'texts')
@@ -105,17 +114,23 @@ def download_index_from_blob(local_index_folder: str) -> bool:
     container_client = blob_service_client.get_container_client(INDEX_CONTAINER)
 
     try:
-        blob_list = list(container_client.list_blobs())
+        # Filter by prefix if specified
+        if blob_prefix:
+            blob_list = list(container_client.list_blobs(name_starts_with=blob_prefix))
+            strip_prefix = blob_prefix if blob_prefix.endswith('/') else blob_prefix + '/'
+        else:
+            blob_list = list(container_client.list_blobs())
+            strip_prefix = ''
+
         if not blob_list:
-            print("No index files found in blob storage", file=sys.stderr, flush=True)
-            _download_in_progress = False
-            _download_complete = True
+            print(f"No index files found in blob storage for project '{project_id}'", file=sys.stderr, flush=True)
+            _download_states[project_id] = {'in_progress': False, 'complete': True, 'thread': None}
             return False
 
-        print(f"Found {len(blob_list)} index files, downloading in parallel...", file=sys.stderr, flush=True)
+        print(f"Found {len(blob_list)} index files for project '{project_id}', downloading in parallel...", file=sys.stderr, flush=True)
 
         # Download in parallel with 20 workers
-        download_args = [(container_client, blob.name, local_index_folder) for blob in blob_list]
+        download_args = [(container_client, blob.name, local_index_folder, strip_prefix) for blob in blob_list]
         downloaded = 0
 
         with ThreadPoolExecutor(max_workers=20) as executor:
@@ -124,35 +139,36 @@ def download_index_from_blob(local_index_folder: str) -> bool:
                 if future.result():
                     downloaded += 1
 
-        print(f"Downloaded {downloaded} index files from blob storage", file=sys.stderr, flush=True)
-        _download_in_progress = False
-        _download_complete = True
+        print(f"Downloaded {downloaded} index files for project '{project_id}' from blob storage", file=sys.stderr, flush=True)
+        _download_states[project_id] = {'in_progress': False, 'complete': True, 'thread': None}
         return True
     except Exception as e:
-        print(f"Error downloading index from blob: {e}", file=sys.stderr, flush=True)
-        _download_in_progress = False
-        _download_complete = True
+        print(f"Error downloading index for project '{project_id}' from blob: {e}", file=sys.stderr, flush=True)
+        _download_states[project_id] = {'in_progress': False, 'complete': True, 'thread': None}
         return False
 
 
-def start_background_index_download(local_index_folder: str):
-    """Start downloading index in background thread."""
-    global _download_thread, _download_complete
-
+def start_background_index_download(local_index_folder: str, project_id: str = 'default'):
+    """Start downloading index in background thread for a specific project."""
     metadata_file = os.path.join(local_index_folder, 'metadata.json')
     if os.path.exists(metadata_file):
-        print("Index already exists locally, skipping download", file=sys.stderr, flush=True)
-        _download_complete = True
+        print(f"Index for project '{project_id}' already exists locally, skipping download", file=sys.stderr, flush=True)
+        _download_states[project_id] = {'in_progress': False, 'complete': True, 'thread': None}
         return
 
-    if _download_thread is not None and _download_thread.is_alive():
-        print("Index download already in progress", file=sys.stderr, flush=True)
+    state = _download_states.get(project_id, {})
+    existing_thread = state.get('thread')
+    if existing_thread is not None and existing_thread.is_alive():
+        print(f"Index download for project '{project_id}' already in progress", file=sys.stderr, flush=True)
         return
 
-    print("Starting background index download...", file=sys.stderr, flush=True)
-    _download_thread = threading.Thread(
+    print(f"Starting background index download for project '{project_id}'...", file=sys.stderr, flush=True)
+    # Use project_id as blob prefix so blobs are organized as {project_id}/texts/...
+    thread = threading.Thread(
         target=download_index_from_blob,
         args=(local_index_folder,),
+        kwargs={'project_id': project_id, 'blob_prefix': project_id},
         daemon=True
     )
-    _download_thread.start()
+    _download_states[project_id] = {'in_progress': True, 'complete': False, 'thread': thread}
+    thread.start()

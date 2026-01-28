@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Projects - Super Search{% endblock %}
+
+{% block content %}
+<div class="projects-container">
+    <h1>Select a Project</h1>
+    <p class="subtitle">Choose a document collection to search</p>
+
+    <div class="project-grid">
+        {% for project in projects %}
+        <a href="{{ url_for('main.project_search', project_id=project.id) }}" class="project-card">
+            <h2>{{ project.name }}</h2>
+            {% if project.description %}
+            <p>{{ project.description }}</p>
+            {% endif %}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

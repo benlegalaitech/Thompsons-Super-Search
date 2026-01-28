@@ -1,8 +1,15 @@
 {
-  "source_folder": "/path/to/your/pdfs",
-  "excel_source_folder": "/path/to/your/excel-native-files",
-  "index_folder": "./index",
-  "file_extensions": [".pdf"],
-  "excel_extensions": [".xls", ".xlsx", ".xlsm", ".xlsb"],
+  "projects": [
+    {
+      "id": "my-project",
+      "name": "My Project Name",
+      "description": "A short description of this document collection",
+      "source_folder": "/path/to/your/pdfs",
+      "excel_source_folder": "/path/to/your/excel-native-files",
+      "index_folder": "./index/my-project",
+      "file_extensions": [".pdf"],
+      "excel_extensions": [".xls", ".xlsx", ".xlsm", ".xlsb"]
+    }
+  ],
   "port": 5000
 }

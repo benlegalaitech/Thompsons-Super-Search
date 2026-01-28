@@ -5,7 +5,7 @@ PDF Text Extraction Script
 Extracts text from PDFs page-by-page and saves as JSON for fast searching.
 
 Usage:
-    python extract.py                    # Run extraction using config.json
+    python extract.py --project ford     # Extract for a specific project
     python extract.py --source /path     # Override source folder
     python extract.py --reindex          # Force re-extract all files
 """
@@ -155,8 +155,20 @@ def extract_all(source_folder, index_folder, reindex=False, extensions=None):
     print(f"Index saved to: {index_folder}")
 
 
+def resolve_project_config(config, project_id):
+    """Resolve source/index folders from a project entry in config.json."""
+    projects = config.get('projects', [])
+    for p in projects:
+        if p['id'] == project_id:
+            return p
+    print(f"Error: Project '{project_id}' not found in config.json")
+    print(f"Available projects: {[p['id'] for p in projects]}")
+    sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Extract text from PDFs for searching')
+    parser.add_argument('--project', help='Project ID (reads config from config.json projects array)')
     parser.add_argument('--source', help='Source folder containing PDFs (overrides config.json)')
     parser.add_argument('--index', help='Index folder for extracted text (overrides config.json)')
     parser.add_argument('--reindex', action='store_true', help='Force re-extract all files')
@@ -165,19 +177,28 @@ def main():
     # Load config
     config = load_config()
 
-    # Get settings (command line args override config)
-    source_folder = args.source or config.get('source_folder')
-    index_folder = args.index or config.get('index_folder', './index')
-    extensions = config.get('file_extensions', ['.pdf'])
+    # Resolve settings from project config or flat config
+    if args.project:
+        project = resolve_project_config(config, args.project)
+        source_folder = args.source or project.get('source_folder', '')
+        index_folder = args.index or project.get('index_folder', f'./index/{args.project}')
+        extensions = project.get('file_extensions', ['.pdf'])
+    else:
+        # Backward compat: flat config or --source/--index overrides
+        source_folder = args.source or config.get('source_folder', '')
+        index_folder = args.index or config.get('index_folder', './index')
+        extensions = config.get('file_extensions', ['.pdf'])
 
     if not source_folder:
         print("Error: No source folder specified.")
-        print("Set 'source_folder' in config.json or use --source argument.")
+        print("Set 'source_folder' in config.json or use --source/--project argument.")
         sys.exit(1)
 
     print(f"Source: {source_folder}")
     print(f"Index:  {index_folder}")
     print(f"Reindex: {args.reindex}")
+    if args.project:
+        print(f"Project: {args.project}")
     print()
 
     extract_all(source_folder, index_folder, reindex=args.reindex, extensions=extensions)

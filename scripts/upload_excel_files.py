@@ -102,6 +102,12 @@ def upload_excel_files(storage_account: str, storage_key: str, source_folder: st
 
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Upload Excel source files to Azure Blob Storage')
+    parser.add_argument('source_folder', nargs='?', default='', help='Source folder containing Excel files')
+    parser.add_argument('--project', help='Project ID (reads config from config.json projects array)')
+    args = parser.parse_args()
+
     storage_account = os.environ.get('AZURE_STORAGE_ACCOUNT', 'thompsonstorage123')
     storage_key = os.environ.get('AZURE_STORAGE_KEY')
 
@@ -110,26 +116,33 @@ if __name__ == '__main__':
         print("Set it with: set AZURE_STORAGE_KEY=<your-key>")
         sys.exit(1)
 
-    # Get source folder from argument or config.json
-    if len(sys.argv) > 1:
-        source_folder = sys.argv[1]
-    else:
+    # Resolve source folder: CLI arg > --project config > flat config
+    source_folder = args.source_folder
+    if not source_folder:
         config_path = os.path.join(os.path.dirname(__file__), '..', 'config.json')
         if os.path.exists(config_path):
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            source_folder = config.get('excel_source_folder', '')
-        else:
-            source_folder = ''
+            if args.project and 'projects' in config:
+                project = next((p for p in config['projects'] if p['id'] == args.project), None)
+                if project:
+                    source_folder = project.get('excel_source_folder', '')
+                else:
+                    print(f"Error: Project '{args.project}' not found in config.json")
+                    sys.exit(1)
+            else:
+                source_folder = config.get('excel_source_folder', '')
 
     if not source_folder:
         print("Error: No source folder specified.")
         print("Usage: python upload_excel_files.py [source_folder]")
-        print("Or set 'excel_source_folder' in config.json")
+        print("Or use --project flag, or set 'excel_source_folder' in config.json")
         sys.exit(1)
 
     print(f"Uploading Excel files from: {source_folder}")
     print(f"To storage account: {storage_account}")
+    if args.project:
+        print(f"Project: {args.project}")
     print()
 
     upload_excel_files(storage_account, storage_key, source_folder)

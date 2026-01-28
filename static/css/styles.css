@@ -647,6 +647,66 @@ body {
     font-size: 0.875rem;
 }
 
+/* Project picker */
+.projects-container {
+    max-width: 900px;
+    margin: 0 auto;
+    text-align: center;
+    padding: 2rem 0;
+}
+
+.projects-container h1 {
+    color: #1a365d;
+    margin-bottom: 0.5rem;
+}
+
+.project-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1.5rem;
+    margin-top: 2rem;
+}
+
+.project-card {
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    text-decoration: none;
+    color: inherit;
+    transition: box-shadow 0.2s, transform 0.2s;
+    text-align: left;
+    border: 1px solid #e2e8f0;
+}
+
+.project-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transform: translateY(-2px);
+}
+
+.project-card h2 {
+    color: #1a365d;
+    margin: 0 0 0.5rem 0;
+    font-size: 1.25rem;
+}
+
+.project-card p {
+    color: #718096;
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+/* Navbar breadcrumb */
+.nav-separator {
+    opacity: 0.5;
+    margin: 0 0.5rem;
+}
+
+.nav-project {
+    font-weight: 400;
+    opacity: 0.9;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .search-form {

@@ -18,16 +18,16 @@
         </div>
         <div class="excel-actions">
             {% if not full_mode %}
-            <a href="{{ url_for('main.excel_view', filepath=filepath, sheet=active_sheet, q=query, full='1') }}" class="btn btn-secondary">View Entire Sheet</a>
+            <a href="{{ url_for('main.project_excel_view', project_id=project.id, filepath=filepath, sheet=active_sheet, q=query, full='1') }}" class="btn btn-secondary">View Entire Sheet</a>
             {% endif %}
-            <a href="{{ url_for('main.serve_file', filepath=filepath) }}" class="btn btn-primary">Download File</a>
+            <a href="{{ url_for('main.project_serve_file', project_id=project.id, filepath=filepath) }}" class="btn btn-primary">Download File</a>
         </div>
     </div>
 
     {% if sheet_names|length > 1 %}
     <div class="excel-sheet-tabs">
         {% for sname in sheet_names %}
-        <a href="{{ url_for('main.excel_view', filepath=filepath, sheet=sname, q=query) }}"
+        <a href="{{ url_for('main.project_excel_view', project_id=project.id, filepath=filepath, sheet=sname, q=query) }}"
            class="sheet-tab {% if sname == active_sheet %}active{% endif %}">
             {{ sname }}
         </a>
@@ -40,7 +40,7 @@
     </div>
 
     <div class="excel-footer">
-        <a href="{{ url_for('main.index') }}" class="btn btn-secondary">Back to Search</a>
+        <a href="{{ url_for('main.project_search', project_id=project.id) }}" class="btn btn-secondary">Back to Search</a>
     </div>
 </div>
 {% endblock %}

@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 
-{% block title %}Search - Super Search{% endblock %}
+{% block title %}Search - {{ project.name }} - Super Search{% endblock %}
 
 {% block content %}
 <div class="search-container">
-    <h1>Document Search</h1>
+    <h1>{{ project.name }}</h1>
     <p class="subtitle">Search across {{ metadata.total_docs | default(0) }} documents &mdash; {{ metadata.get('pdf_docs', 0) }} PDFs, {{ metadata.get('excel_docs', 0) }} Excel files</p>
 
     <div class="search-section">
         <form class="search-form" id="searchForm">
-            <input type="text" name="q" id="searchInput" placeholder="Enter search terms (e.g. Ford Confidential)..." autocomplete="off">
+            <input type="text" name="q" id="searchInput" placeholder="Enter search terms..." autocomplete="off">
             <button type="submit" class="btn btn-primary">Search</button>
         </form>
         <div class="filter-bar">
@@ -32,6 +32,7 @@
 
 {% block scripts %}
 <script>
+const PROJECT_ID = '{{ project.id }}';
 const searchForm = document.getElementById('searchForm');
 const searchInput = document.getElementById('searchInput');
 const resultsDiv = document.getElementById('results');
@@ -72,7 +73,7 @@ function performSearch() {
     `;
 
     const typeParam = currentFileType ? `&type=${currentFileType}` : '';
-    fetch(`/api/search?q=${encodeURIComponent(currentQuery)}&page=${currentPage}${typeParam}`)
+    fetch(`/p/${PROJECT_ID}/api/search?q=${encodeURIComponent(currentQuery)}&page=${currentPage}${typeParam}`)
         .then(response => response.json())
         .then(data => {
             renderResults(data);
@@ -112,12 +113,12 @@ function renderResults(data) {
         let fileUrl, linkTitle, locationLabel, typeBadge;
 
         if (isExcel) {
-            fileUrl = `/excel-view/${result.filepath}?sheet=${encodeURIComponent(result.sheet_name || '')}&q=${encodeURIComponent(data.query)}`;
+            fileUrl = `/p/${PROJECT_ID}/excel-view/${result.filepath}?sheet=${encodeURIComponent(result.sheet_name || '')}&q=${encodeURIComponent(data.query)}`;
             linkTitle = `Click to view Excel sheet: ${result.sheet_name || 'Sheet ' + result.page}`;
             locationLabel = result.sheet_name ? `Sheet: ${escapeHtml(result.sheet_name)}` : `Sheet ${result.page}`;
             typeBadge = '<span class="file-type-badge excel">XLSX</span>';
         } else {
-            fileUrl = `/pdf/${result.filepath}#page=${result.page}`;
+            fileUrl = `/p/${PROJECT_ID}/pdf/${result.filepath}#page=${result.page}`;
             linkTitle = `Click to open PDF at page ${result.page}`;
             locationLabel = `Page ${result.page}`;
             typeBadge = '<span class="file-type-badge pdf">PDF</span>';

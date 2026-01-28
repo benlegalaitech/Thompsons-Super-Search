@@ -7,42 +7,41 @@ from markupsafe import Markup
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, current_app, send_file, abort
 from .auth import login_required, check_password, authenticate_user, logout_user
 from .blob_storage import is_blob_storage_enabled, generate_pdf_sas_url, check_blob_exists, download_index_from_blob, is_index_download_complete, is_index_downloading, get_blob_service_client, PDF_CONTAINER
+from .projects import get_project, get_all_projects
 
 main = Blueprint('main', __name__)
 
-# Global index storage (loaded on first request)
-_index = None
-_metadata = None
+# Per-project index storage (loaded on first request per project)
+_indexes = {}    # {project_id: [doc, doc, ...]}
+_metadatas = {}  # {project_id: {total_docs: N, ...}}
 
 
-def get_index_folder():
-    """Get the index folder path."""
-    return current_app.config.get('INDEX_FOLDER', './index')
+def load_project_index(project_id):
+    """Load all extracted text into memory for a specific project."""
+    global _indexes, _metadatas
 
+    if project_id in _indexes:
+        return _indexes[project_id], _metadatas[project_id]
 
-def load_index():
-    """Load all extracted text into memory."""
-    global _index, _metadata
+    project = get_project(project_id)
+    if project is None:
+        abort(404, 'Project not found')
 
-    if _index is not None:
-        return _index, _metadata
-
-    index_folder = get_index_folder()
+    index_folder = project.get('index_folder', f'./index/{project_id}')
     texts_folder = os.path.join(index_folder, 'texts')
     metadata_file = os.path.join(index_folder, 'metadata.json')
 
     # If blob storage is enabled and index is still downloading, wait
-    if is_blob_storage_enabled() and is_index_downloading() and not is_index_download_complete():
-        # Background download in progress, return loading state
+    if is_blob_storage_enabled() and is_index_downloading(project_id) and not is_index_download_complete(project_id):
         return [], {'total_docs': 0, 'total_pages': 0, 'loading': True}
 
-    _index = []
-    _metadata = {'total_docs': 0, 'total_pages': 0}
+    index = []
+    metadata = {'total_docs': 0, 'total_pages': 0}
 
     # Load metadata if exists
     if os.path.exists(metadata_file):
         with open(metadata_file, 'r', encoding='utf-8') as f:
-            _metadata = json.load(f)
+            metadata = json.load(f)
 
     # Load all text files
     if os.path.exists(texts_folder):
@@ -55,14 +54,17 @@ def load_index():
                         # Default file_type for legacy PDF-only index files
                         if 'file_type' not in doc:
                             doc['file_type'] = 'pdf'
-                        _index.append(doc)
+                        index.append(doc)
                 except Exception as e:
                     print(f"Error loading {filepath}: {e}")
 
-    _metadata['total_docs'] = len(_index)
-    _metadata['total_pages'] = sum(len(doc.get('pages', [])) for doc in _index)
+    metadata['total_docs'] = len(index)
+    metadata['total_pages'] = sum(len(doc.get('pages', [])) for doc in index)
 
-    return _index, _metadata
+    _indexes[project_id] = index
+    _metadatas[project_id] = metadata
+
+    return index, metadata
 
 
 def parse_search_terms(query):
@@ -91,14 +93,14 @@ def parse_search_terms(query):
     return terms
 
 
-def search_index(query, page=1, per_page=20, file_type_filter=None):
-    """Search the index for matching documents.
+def search_index(query, project_id, page=1, per_page=20, file_type_filter=None):
+    """Search the index for matching documents within a project.
 
     Smart search: Multiple words are treated as AND search.
     Use quotes for exact phrase matching: "Ford Confidential"
     file_type_filter: None (all), 'pdf', or 'excel'
     """
-    index, metadata = load_index()
+    index, metadata = load_project_index(project_id)
 
     if not query or not query.strip():
         return {
@@ -214,7 +216,15 @@ def highlight_matches(text, search_terms):
     return text
 
 
-# Routes
+def _get_project_or_404(project_id):
+    """Validate project_id and return project config, or abort 404."""
+    project = get_project(project_id)
+    if project is None:
+        abort(404, 'Project not found')
+    return project
+
+
+# ─── Auth routes ───
 
 @main.route('/login', methods=['GET', 'POST'])
 def login():
@@ -223,7 +233,7 @@ def login():
         password = request.form.get('password', '')
         if check_password(password):
             authenticate_user()
-            next_url = request.args.get('next', url_for('main.index'))
+            next_url = request.args.get('next', url_for('main.project_picker'))
             return redirect(next_url)
         flash('Invalid password', 'error')
 
@@ -237,23 +247,46 @@ def logout():
     return redirect(url_for('main.login'))
 
 
+# ─── Project picker ───
+
 @main.route('/')
 @login_required
-def index():
-    """Main search page."""
-    _, metadata = load_index()
-    return render_template('search.html', metadata=metadata)
+def project_picker():
+    """Show project selection page, or redirect if only one project."""
+    projects = get_all_projects()
+    if len(projects) == 1:
+        return redirect(url_for('main.project_search', project_id=projects[0]['id']))
+    return render_template('projects.html', projects=projects)
 
 
-@main.route('/api/search')
+@main.route('/api/projects')
 @login_required
-def api_search():
-    """Search API endpoint."""
+def api_projects():
+    """List available projects."""
+    return jsonify(get_all_projects())
+
+
+# ─── Project-scoped routes ───
+
+@main.route('/p/<project_id>/')
+@login_required
+def project_search(project_id):
+    """Main search page for a specific project."""
+    project = _get_project_or_404(project_id)
+    _, metadata = load_project_index(project_id)
+    return render_template('search.html', metadata=metadata, project=project)
+
+
+@main.route('/p/<project_id>/api/search')
+@login_required
+def project_api_search(project_id):
+    """Search API endpoint scoped to a project."""
+    _get_project_or_404(project_id)
     query = request.args.get('q', '')
     page = request.args.get('page', 1, type=int)
     file_type = request.args.get('type', '')  # '', 'pdf', or 'excel'
 
-    results = search_index(query, page=page, file_type_filter=file_type or None)
+    results = search_index(query, project_id=project_id, page=page, file_type_filter=file_type or None)
 
     # Highlight matches in context (using parsed search terms)
     search_terms = parse_search_terms(query)
@@ -263,32 +296,41 @@ def api_search():
     return jsonify(results)
 
 
-@main.route('/api/stats')
+@main.route('/p/<project_id>/api/stats')
 @login_required
-def api_stats():
-    """Get index statistics."""
-    _, metadata = load_index()
+def project_api_stats(project_id):
+    """Get index statistics for a project."""
+    _get_project_or_404(project_id)
+    _, metadata = load_project_index(project_id)
     return jsonify(metadata)
 
 
 @main.route('/health')
 def health():
     """Health check endpoint for container orchestration."""
+    projects = get_all_projects()
+    project_statuses = {}
+    for p in projects:
+        pid = p['id']
+        project_statuses[pid] = {
+            'index_downloading': is_index_downloading(pid),
+            'index_ready': is_index_download_complete(pid)
+        }
     return jsonify({
         'status': 'ok',
-        'index_downloading': is_index_downloading(),
-        'index_ready': is_index_download_complete()
+        'projects': project_statuses
     })
 
 
-@main.route('/pdf/<path:filepath>')
+@main.route('/p/<project_id>/pdf/<path:filepath>')
 @login_required
-def serve_pdf(filepath):
+def project_serve_pdf(project_id, filepath):
     """Serve a PDF file - from blob storage or local source folder."""
+    project = _get_project_or_404(project_id)
 
     # If blob storage is configured, redirect to SAS URL
     if is_blob_storage_enabled():
-        current_app.logger.info(f"PDF request (blob): filepath={filepath!r}")
+        current_app.logger.info(f"PDF request (blob): project={project_id}, filepath={filepath!r}")
 
         if not check_blob_exists(filepath):
             current_app.logger.error(f"File not found in blob storage: {filepath}")
@@ -297,12 +339,12 @@ def serve_pdf(filepath):
         sas_url = generate_pdf_sas_url(filepath, expiry_hours=1)
         return redirect(sas_url)
 
-    # Fallback to local file serving (original logic)
-    source_folder = current_app.config.get('SOURCE_FOLDER', '')
-    current_app.logger.info(f"PDF request (local): filepath={filepath!r}, source_folder={source_folder!r}")
+    # Fallback to local file serving
+    source_folder = project.get('source_folder', '')
+    current_app.logger.info(f"PDF request (local): project={project_id}, filepath={filepath!r}, source_folder={source_folder!r}")
 
     if not source_folder:
-        current_app.logger.error("SOURCE_FOLDER not configured")
+        current_app.logger.error(f"source_folder not configured for project '{project_id}'")
         abort(404, 'Source folder not configured')
 
     # Construct full path and ensure it's within source folder (security)
@@ -319,11 +361,11 @@ def serve_pdf(filepath):
     return send_file(full_path, mimetype='application/pdf')
 
 
-def _resolve_excel_path(filepath):
+def _resolve_excel_path(filepath, project):
     """Resolve an Excel filepath to a local file path, with security checks.
 
     If blob storage is enabled, downloads the file to a temp location first.
-    Returns the local file path (either from EXCEL_SOURCE_FOLDER or temp download).
+    Returns the local file path (either from project's excel_source_folder or temp download).
     """
     # If blob storage is enabled, download from blob to temp file
     if is_blob_storage_enabled():
@@ -349,10 +391,10 @@ def _resolve_excel_path(filepath):
             abort(500, 'Error downloading file from storage')
 
     # Local file serving
-    excel_source = current_app.config.get('EXCEL_SOURCE_FOLDER', '')
+    excel_source = project.get('excel_source_folder', '')
 
     if not excel_source:
-        current_app.logger.error("EXCEL_SOURCE_FOLDER not configured")
+        current_app.logger.error(f"excel_source_folder not configured for project '{project['id']}'")
         abort(404, 'Excel source folder not configured')
 
     full_path = os.path.normpath(os.path.join(excel_source, filepath))
@@ -527,15 +569,16 @@ def _escape_html(text):
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
 
 
-@main.route('/excel-view/<path:filepath>')
+@main.route('/p/<project_id>/excel-view/<path:filepath>')
 @login_required
-def excel_view(filepath):
+def project_excel_view(project_id, filepath):
     """View an Excel sheet as an HTML table with search term highlighting."""
+    project = _get_project_or_404(project_id)
     sheet_name = request.args.get('sheet', '')
     query = request.args.get('q', '')
     full_mode = request.args.get('full', '0') == '1'
 
-    full_path = _resolve_excel_path(filepath)
+    full_path = _resolve_excel_path(filepath, project)
     is_temp = is_blob_storage_enabled()
 
     try:
@@ -571,7 +614,8 @@ def excel_view(filepath):
         full_mode=full_mode,
         match_count=match_count,
         table_html=Markup(table_html),
-        total_rows=len(rows)
+        total_rows=len(rows),
+        project=project
     )
 
 
@@ -583,10 +627,11 @@ EXCEL_MIME_TYPES = {
 }
 
 
-@main.route('/file/<path:filepath>')
+@main.route('/p/<project_id>/file/<path:filepath>')
 @login_required
-def serve_file(filepath):
+def project_serve_file(project_id, filepath):
     """Serve an Excel file for download."""
+    project = _get_project_or_404(project_id)
     ext = os.path.splitext(filepath)[1].lower()
 
     # For blob storage, generate SAS URL
@@ -597,9 +642,60 @@ def serve_file(filepath):
         return redirect(sas_url)
 
     # Local file serving
-    full_path = _resolve_excel_path(filepath)
+    full_path = _resolve_excel_path(filepath, project)
 
     mimetype = EXCEL_MIME_TYPES.get(ext, 'application/octet-stream')
     return send_file(full_path, mimetype=mimetype,
                      as_attachment=True,
                      download_name=os.path.basename(filepath))
+
+
+# ─── Backward compatibility routes ───
+# These redirect old URLs to the new project-scoped URLs when only one project exists.
+
+def _get_single_project_id():
+    """Get the project ID if there's only one project, otherwise abort 404."""
+    projects = get_all_projects()
+    if len(projects) == 1:
+        return projects[0]['id']
+    abort(404)
+
+
+@main.route('/api/search')
+@login_required
+def legacy_api_search():
+    """Legacy search API — redirects to single project."""
+    project_id = _get_single_project_id()
+    return redirect(url_for('main.project_api_search', project_id=project_id, **request.args))
+
+
+@main.route('/api/stats')
+@login_required
+def legacy_api_stats():
+    """Legacy stats API — redirects to single project."""
+    project_id = _get_single_project_id()
+    return redirect(url_for('main.project_api_stats', project_id=project_id))
+
+
+@main.route('/pdf/<path:filepath>')
+@login_required
+def legacy_serve_pdf(filepath):
+    """Legacy PDF serving — redirects to single project."""
+    project_id = _get_single_project_id()
+    return redirect(url_for('main.project_serve_pdf', project_id=project_id, filepath=filepath))
+
+
+@main.route('/excel-view/<path:filepath>')
+@login_required
+def legacy_excel_view(filepath):
+    """Legacy Excel view — redirects to single project."""
+    project_id = _get_single_project_id()
+    return redirect(url_for('main.project_excel_view', project_id=project_id, filepath=filepath, **request.args))
+
+
+@main.route('/file/<path:filepath>')
+@login_required
+def legacy_serve_file(filepath):
+    """Legacy file download — redirects to single project."""
+    project_id = _get_single_project_id()
+    return redirect(url_for('main.project_serve_file', project_id=project_id, filepath=filepath))
