@@ -73,9 +73,6 @@ def validate_query_plan(plan_dict: dict) -> QueryPlan:
         required = [required]
     required = [sanitize_term(t) for t in required if sanitize_term(t)]
 
-    if not required:
-        raise LLMValidationError("No valid required terms extracted from query")
-
     # Extract and sanitize optional terms (synonyms)
     optional = plan_dict.get('optional_terms', [])
     if isinstance(optional, str):
@@ -95,6 +92,17 @@ def validate_query_plan(plan_dict: dict) -> QueryPlan:
     if isinstance(locations, str):
         locations = [locations]
     locations = [sanitize_term(loc) for loc in locations if sanitize_term(loc)][:3]
+
+    # If no required terms but we have person names or locations, use those as required terms
+    # This handles queries like "Ben" or "Clydeside" where only entity is specified
+    if not required:
+        if person_names:
+            required = person_names.copy()
+        elif locations:
+            required = locations.copy()
+
+    if not required:
+        raise LLMValidationError("No valid required terms extracted from query")
 
     # Extract date hints (cap at 2)
     date_hints = plan_dict.get('date_hints', [])
