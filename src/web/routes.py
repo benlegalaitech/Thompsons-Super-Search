@@ -517,6 +517,7 @@ def project_api_search(project_id):
 @login_required
 def project_api_smart_search(project_id):
     """Smart search API endpoint using LLM query parsing."""
+    import sys
     import time
 
     project = _get_project_or_404(project_id)
@@ -524,6 +525,8 @@ def project_api_smart_search(project_id):
     query = data.get('query', '').strip()
     page = data.get('page', 1)
     file_type = data.get('type', '')
+
+    print(f"[SMART-SEARCH] Request received: project={project_id}, query='{query}'", file=sys.stderr)
 
     if not query:
         return jsonify({
@@ -552,6 +555,7 @@ def project_api_smart_search(project_id):
 
     try:
         # Parse the query with LLM
+        print(f"[SMART-SEARCH] Calling LLM...", file=sys.stderr)
         llm_start = time.time()
         query_plan = parse_query_with_llm(
             query,
@@ -559,6 +563,7 @@ def project_api_smart_search(project_id):
             project_description=project.get('description', '')
         )
         llm_latency_ms = int((time.time() - llm_start) * 1000)
+        print(f"[SMART-SEARCH] LLM response in {llm_latency_ms}ms: {query_plan.required_terms}", file=sys.stderr)
 
         # Check if it was a cache hit (latency < 50ms suggests cache)
         cache_hit = llm_latency_ms < 50
@@ -614,6 +619,7 @@ def project_api_smart_search(project_id):
 
     except LLMTimeoutError as e:
         error_message = str(e)
+        print(f"[SMART-SEARCH] LLM TIMEOUT: {error_message}", file=sys.stderr)
         log_search(
             project_id=project_id,
             query_text=query,
@@ -629,6 +635,7 @@ def project_api_smart_search(project_id):
 
     except LLMValidationError as e:
         error_message = str(e)
+        print(f"[SMART-SEARCH] LLM VALIDATION ERROR: {error_message}", file=sys.stderr)
         log_search(
             project_id=project_id,
             query_text=query,
@@ -644,6 +651,7 @@ def project_api_smart_search(project_id):
 
     except LLMError as e:
         error_message = str(e)
+        print(f"[SMART-SEARCH] LLM ERROR: {error_message}", file=sys.stderr)
         log_search(
             project_id=project_id,
             query_text=query,
@@ -658,7 +666,10 @@ def project_api_smart_search(project_id):
         }), 503
 
     except Exception as e:
+        import traceback
         error_message = str(e)
+        print(f"[SMART-SEARCH] UNEXPECTED ERROR: {error_message}", file=sys.stderr)
+        print(f"[SMART-SEARCH] Traceback: {traceback.format_exc()}", file=sys.stderr)
         current_app.logger.error(f"Smart search error: {e}")
         log_search(
             project_id=project_id,

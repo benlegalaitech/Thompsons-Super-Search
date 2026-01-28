@@ -219,13 +219,20 @@ def parse_query_with_llm(query: str, project_id: str = "", project_description: 
         LLMError: If the LLM call fails
         LLMValidationError: If the LLM output can't be validated
     """
+    import sys
+    print(f"[LLM-QUERY] parse_query_with_llm called: query='{query}'", file=sys.stderr)
+
     # Check cache first
     cached = _get_cached_plan(project_id, query)
     if cached:
+        print(f"[LLM-QUERY] Cache hit!", file=sys.stderr)
         return cached
 
     if not OPENAI_API_KEY:
+        print(f"[LLM-QUERY] ERROR: No API key configured!", file=sys.stderr)
         raise LLMError("OpenAI API key not configured")
+
+    print(f"[LLM-QUERY] API key present (length={len(OPENAI_API_KEY)}), model={OPENAI_MODEL}", file=sys.stderr)
 
     # Build the prompt
     user_message = f"Search query: {query}"
@@ -264,8 +271,10 @@ def parse_query_with_llm(query: str, project_id: str = "", project_description: 
             return plan
 
         except json.JSONDecodeError as e:
+            print(f"[LLM-QUERY] JSON decode error: {e}", file=sys.stderr)
             last_error = LLMValidationError(f"Invalid JSON from LLM: {e}")
         except Exception as e:
+            print(f"[LLM-QUERY] Exception: {type(e).__name__}: {e}", file=sys.stderr)
             if "timeout" in str(e).lower():
                 last_error = LLMTimeoutError("Search is taking longer than expected. Please try again.")
             else:
@@ -273,8 +282,10 @@ def parse_query_with_llm(query: str, project_id: str = "", project_description: 
 
         # Wait before retry (exponential backoff)
         if attempt < max_retries:
+            print(f"[LLM-QUERY] Retrying (attempt {attempt + 2})...", file=sys.stderr)
             time.sleep(2.0 * (attempt + 1))
 
+    print(f"[LLM-QUERY] All retries exhausted, raising: {last_error}", file=sys.stderr)
     raise last_error
 
 
