@@ -16,6 +16,10 @@ from .llm_query import (
     is_smart_search_enabled, is_keyword_search_enabled
 )
 from .query_logger import log_search
+from .admin import (
+    admin_required, is_admin, get_current_user_email, get_current_user_name,
+    list_app_users, add_user_access, remove_user_access, GraphAPIError
+)
 
 main = Blueprint('main', __name__)
 
@@ -1171,3 +1175,68 @@ def legacy_serve_file(filepath):
     """Legacy file download — redirects to single project."""
     project_id = _get_single_project_id()
     return redirect(url_for('main.project_serve_file', project_id=project_id, filepath=filepath))
+
+
+# ─── Admin Routes ───────────────────────────────────────────────────────────
+
+@main.route('/admin')
+@login_required
+@admin_required
+def admin_page():
+    """Admin page for user management."""
+    return render_template('admin.html')
+
+
+@main.route('/admin/api/users', methods=['GET'])
+@login_required
+@admin_required
+def admin_list_users():
+    """API endpoint to list users with access."""
+    try:
+        users = list_app_users()
+        return jsonify({'users': users})
+    except GraphAPIError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        current_app.logger.error(f"Error listing users: {e}")
+        return jsonify({'error': 'Failed to load users'}), 500
+
+
+@main.route('/admin/api/users', methods=['POST'])
+@login_required
+@admin_required
+def admin_add_user():
+    """API endpoint to add a user."""
+    data = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+
+    # Validate Thompsons domain
+    if not email.endswith('@thompsons-scotland.co.uk') and not email.endswith('@thompsons.co.uk'):
+        return jsonify({'error': 'Only Thompsons email addresses are allowed'}), 400
+
+    try:
+        result = add_user_access(email)
+        return jsonify(result)
+    except GraphAPIError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        current_app.logger.error(f"Error adding user {email}: {e}")
+        return jsonify({'error': 'Failed to add user'}), 500
+
+
+@main.route('/admin/api/users/<assignment_id>', methods=['DELETE'])
+@login_required
+@admin_required
+def admin_remove_user(assignment_id):
+    """API endpoint to remove a user's access."""
+    try:
+        remove_user_access(assignment_id)
+        return jsonify({'status': 'removed'})
+    except GraphAPIError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        current_app.logger.error(f"Error removing user {assignment_id}: {e}")
+        return jsonify({'error': 'Failed to remove user'}), 500

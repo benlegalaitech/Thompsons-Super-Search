@@ -930,3 +930,159 @@ body {
         margin-top: 0.5rem;
     }
 }
+
+/* ─── Admin Page Styles ─── */
+
+.admin-page {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.admin-page h1 {
+    color: #1a365d;
+    margin-bottom: 0.25rem;
+}
+
+.admin-subtitle {
+    color: #4a5568;
+    margin-bottom: 2rem;
+}
+
+.admin-section {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.admin-section h2 {
+    color: #2d3748;
+    font-size: 1.125rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.add-user-form .form-row {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.add-user-form .input-field {
+    flex: 1;
+    padding: 0.625rem 0.875rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 0.9375rem;
+}
+
+.add-user-form .input-field:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.add-user-form .form-help {
+    color: #6b7280;
+    font-size: 0.8125rem;
+    margin-top: 0.5rem;
+}
+
+.message-box {
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    margin-top: 1rem;
+    font-size: 0.875rem;
+}
+
+.message-success {
+    background: #ecfdf5;
+    border: 1px solid #6ee7b7;
+    color: #047857;
+}
+
+.message-error {
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    color: #b91c1c;
+}
+
+.message-warning {
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+}
+
+.user-list .loading {
+    color: #6b7280;
+    text-align: center;
+    padding: 2rem;
+}
+
+.user-list .empty-message {
+    color: #6b7280;
+    text-align: center;
+    padding: 2rem;
+}
+
+.user-list .error-message {
+    color: #b91c1c;
+    background: #fef2f2;
+    padding: 1rem;
+    border-radius: 6px;
+    text-align: center;
+}
+
+.user-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.user-table th,
+.user-table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.user-table th {
+    color: #6b7280;
+    font-weight: 600;
+    font-size: 0.8125rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.user-table td {
+    color: #374151;
+}
+
+.user-table tr:hover {
+    background: #f9fafb;
+}
+
+.btn-danger {
+    background: #dc2626;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #b91c1c;
+}
+
+.btn-small {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+}
+
+@media (max-width: 768px) {
+    .add-user-form .form-row {
+        flex-direction: column;
+    }
+
+    .user-table th:nth-child(2),
+    .user-table td:nth-child(2) {
+        text-align: right;
+    }
+}

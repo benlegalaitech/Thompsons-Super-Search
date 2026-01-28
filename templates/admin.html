@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - Super Search{% endblock %}
+
+{% block content %}
+<div class="admin-page">
+    <h1>User Access Management</h1>
+    <p class="admin-subtitle">Manage who can access Super Search</p>
+
+    <div class="admin-section">
+        <h2>Add User</h2>
+        <form id="addUserForm" class="add-user-form">
+            <div class="form-row">
+                <input type="email"
+                       id="userEmail"
+                       name="email"
+                       placeholder="user@thompsons-scotland.co.uk"
+                       pattern="[a-zA-Z0-9._%+-]+@thompsons(-scotland)?\.co\.uk"
+                       required
+                       class="input-field">
+                <button type="submit" class="btn btn-primary">Add User</button>
+            </div>
+            <p class="form-help">Enter a Thompsons email address to grant access</p>
+        </form>
+        <div id="addUserMessage" class="message-box" style="display: none;"></div>
+    </div>
+
+    <div class="admin-section">
+        <h2>Current Users</h2>
+        <div id="userList" class="user-list">
+            <div class="loading">Loading users...</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadUsers();
+
+    document.getElementById('addUserForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        addUser();
+    });
+});
+
+function loadUsers() {
+    fetch('/admin/api/users')
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                showUserList('<div class="error-message">' + data.error + '</div>');
+                return;
+            }
+
+            if (data.users.length === 0) {
+                showUserList('<div class="empty-message">No users have access yet.</div>');
+                return;
+            }
+
+            let html = '<table class="user-table"><thead><tr><th>Name</th><th>Actions</th></tr></thead><tbody>';
+            data.users.forEach(function(user) {
+                html += '<tr>';
+                html += '<td>' + escapeHtml(user.displayName) + '</td>';
+                html += '<td><button class="btn btn-danger btn-small" onclick="removeUser(\'' + user.assignmentId + '\', \'' + escapeHtml(user.displayName) + '\')">Remove</button></td>';
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+
+            showUserList(html);
+        })
+        .catch(error => {
+            showUserList('<div class="error-message">Failed to load users: ' + error + '</div>');
+        });
+}
+
+function showUserList(html) {
+    document.getElementById('userList').innerHTML = html;
+}
+
+function addUser() {
+    const email = document.getElementById('userEmail').value.trim();
+    const messageBox = document.getElementById('addUserMessage');
+
+    if (!email) {
+        showMessage(messageBox, 'Please enter an email address', 'error');
+        return;
+    }
+
+    // Show loading state
+    const submitBtn = document.querySelector('#addUserForm button[type="submit"]');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Adding...';
+    submitBtn.disabled = true;
+
+    fetch('/admin/api/users', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email: email })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            showMessage(messageBox, data.error, 'error');
+        } else if (data.status === 'already_exists') {
+            showMessage(messageBox, 'User already has access', 'warning');
+        } else {
+            showMessage(messageBox, 'User added successfully', 'success');
+            document.getElementById('userEmail').value = '';
+            loadUsers();
+        }
+    })
+    .catch(error => {
+        showMessage(messageBox, 'Failed to add user: ' + error, 'error');
+    })
+    .finally(() => {
+        submitBtn.textContent = originalText;
+        submitBtn.disabled = false;
+    });
+}
+
+function removeUser(assignmentId, displayName) {
+    if (!confirm('Remove access for ' + displayName + '?')) {
+        return;
+    }
+
+    fetch('/admin/api/users/' + assignmentId, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Failed to remove user: ' + data.error);
+        } else {
+            loadUsers();
+        }
+    })
+    .catch(error => {
+        alert('Failed to remove user: ' + error);
+    });
+}
+
+function showMessage(element, message, type) {
+    element.textContent = message;
+    element.className = 'message-box message-' + type;
+    element.style.display = 'block';
+
+    // Auto-hide after 5 seconds
+    setTimeout(function() {
+        element.style.display = 'none';
+    }, 5000);
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

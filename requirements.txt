@@ -22,3 +22,6 @@ azure-storage-blob>=12.19.0
 
 # OpenAI for smart search
 openai>=1.0.0
+
+# HTTP requests for Microsoft Graph API
+requests>=2.31.0
