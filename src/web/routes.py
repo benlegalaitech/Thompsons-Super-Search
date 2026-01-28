@@ -176,6 +176,25 @@ def start_index_preload(project_id, index_folder):
     thread.start()
 
 
+def word_match(term, text):
+    """Check if term appears as a whole word in text (case-insensitive).
+
+    Uses word boundaries to prevent 'age' matching in 'management'.
+    """
+    # Escape regex special characters in the term
+    escaped_term = re.escape(term.lower())
+    # Use word boundaries - \b matches word boundaries
+    pattern = r'\b' + escaped_term + r'\b'
+    return bool(re.search(pattern, text.lower()))
+
+
+def word_count(term, text):
+    """Count whole-word occurrences of term in text (case-insensitive)."""
+    escaped_term = re.escape(term.lower())
+    pattern = r'\b' + escaped_term + r'\b'
+    return len(re.findall(pattern, text.lower()))
+
+
 def parse_search_terms(query):
     """Parse search query into individual terms.
 
@@ -250,13 +269,13 @@ def search_index(query, project_id, page=1, per_page=20, file_type_filter=None):
             text = page_info.get('text', '')
             text_lower = text.lower()
 
-            # Check if ALL search terms are present (AND search)
-            if all(term in text_lower for term in search_terms):
+            # Check if ALL search terms are present (AND search, word boundary matching)
+            if all(word_match(term, text) for term in search_terms):
                 # Extract context around the first matching term
                 context = extract_context(text, search_terms[0])
 
-                # Count total matches across all terms
-                match_count = sum(text_lower.count(term) for term in search_terms)
+                # Count total matches across all terms (whole words only)
+                match_count = sum(word_count(term, text) for term in search_terms)
 
                 results.append({
                     'filename': filename,
@@ -365,8 +384,8 @@ def smart_search_index(query_plan, project_id, page=1, per_page=20, file_type_fi
             text = page_info.get('text', '')
             text_lower = text.lower()
 
-            # Check if ALL required terms are present
-            if not all(term in text_lower for term in required_terms):
+            # Check if ALL required terms are present (using word boundary matching)
+            if not all(word_match(term, text) for term in required_terms):
                 continue
 
             # Calculate relevance score
@@ -374,22 +393,22 @@ def smart_search_index(query_plan, project_id, page=1, per_page=20, file_type_fi
 
             # Required terms (base score)
             for term in required_terms:
-                count = text_lower.count(term)
+                count = word_count(term, text)
                 score += min(count * 10, 30)  # Cap per term
 
-            # Optional/synonym terms (bonus)
+            # Optional/synonym terms (bonus) - use word boundary matching
             for term in optional_terms:
-                if term in text_lower:
+                if word_match(term, text):
                     score += 5
 
-            # Person name matches (high value)
+            # Person name matches (high value) - use word boundary matching
             for name in person_names:
-                if name in text_lower:
+                if word_match(name, text):
                     score += 15
 
-            # Location matches
+            # Location matches - use word boundary matching
             for loc in locations:
-                if loc in text_lower:
+                if word_match(loc, text):
                     score += 10
 
             # Normalize to 0-100
