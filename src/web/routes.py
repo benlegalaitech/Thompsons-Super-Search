@@ -12,9 +12,11 @@ from .blob_storage import is_blob_storage_enabled, generate_pdf_sas_url, check_b
 from .projects import get_project, get_all_projects
 from . import get_index_folder
 from .llm_query import (
-    parse_query_with_llm, QueryPlan, LLMError, LLMTimeoutError, LLMValidationError,
+    parse_query_with_llm, QueryPlan, QueryAnalysis, analyze_query,
+    LLMError, LLMTimeoutError, LLMValidationError,
     is_smart_search_enabled, is_keyword_search_enabled
 )
+from .extractor import extract_entities, ExtractionError
 from .query_logger import log_search
 from .admin import (
     admin_required, is_admin, get_current_user_email, get_current_user_name,
@@ -520,7 +522,7 @@ def project_api_search(project_id):
 @main.route('/p/<project_id>/api/smart-search', methods=['POST'])
 @login_required
 def project_api_smart_search(project_id):
-    """Smart search API endpoint using LLM query parsing."""
+    """Smart search API endpoint with intent classification and extraction support."""
     import sys
     import time
 
@@ -553,24 +555,151 @@ def project_api_smart_search(project_id):
 
     start_time = time.time()
     llm_latency_ms = None
+    extraction_time_ms = None
     error_message = None
-    query_plan = None
+    query_analysis = None
     cache_hit = False
 
     try:
-        # Parse the query with LLM
-        print(f"[SMART-SEARCH] Calling LLM...", file=sys.stderr)
+        # Analyze the query to determine intent
+        print(f"[SMART-SEARCH] Analyzing query intent...", file=sys.stderr)
         llm_start = time.time()
-        query_plan = parse_query_with_llm(
+        query_analysis = analyze_query(
             query,
             project_id=project_id,
             project_description=project.get('description', '')
         )
         llm_latency_ms = int((time.time() - llm_start) * 1000)
-        print(f"[SMART-SEARCH] LLM response in {llm_latency_ms}ms: {query_plan.required_terms}", file=sys.stderr)
+        print(f"[SMART-SEARCH] Analysis complete in {llm_latency_ms}ms: intent={query_analysis.intent}, "
+              f"target={query_analysis.extraction_target}", file=sys.stderr)
 
-        # Check if it was a cache hit (latency < 50ms suggests cache)
+        # Check if it was a cache hit
         cache_hit = llm_latency_ms < 50
+
+        # Handle EXTRACTION queries differently
+        if query_analysis.is_extraction_query():
+            print(f"[SMART-SEARCH] Extraction query detected, performing broad search...", file=sys.stderr)
+
+            # For extraction: do a broad search to find relevant documents
+            # Use search_terms from analysis, or fall back to optional_terms
+            broad_search_terms = query_analysis.search_terms or query_analysis.optional_terms
+            if not broad_search_terms:
+                broad_search_terms = ['document', 'report']  # Fallback for very broad queries
+
+            # Create a temporary QueryPlan for the broad search
+            broad_plan = QueryPlan(
+                required_terms=[],  # No required terms for broad search
+                optional_terms=broad_search_terms,
+                interpretation=query_analysis.interpretation,
+                confidence=query_analysis.confidence
+            )
+
+            # Do a broad search - get more results for extraction
+            index, metadata = load_project_index(project_id)
+
+            # For extraction, scan documents that match any search term
+            search_results = []
+            seen = set()
+
+            for doc in index:
+                # Apply file type filter
+                doc_type = doc.get('file_type', 'pdf')
+                if file_type and doc_type != file_type:
+                    continue
+
+                filename = doc.get('filename', '')
+
+                for page_info in doc.get('pages', []):
+                    page_num = page_info.get('page_num', 0)
+                    text = page_info.get('text', '')
+                    text_lower = text.lower()
+
+                    # Match if ANY search term is present
+                    matches = any(term in text_lower for term in broad_search_terms)
+                    if matches:
+                        result_key = f"{filename}:{page_num}"
+                        if result_key not in seen:
+                            seen.add(result_key)
+                            search_results.append({
+                                'filename': filename,
+                                'page': page_num,
+                                'text': text,
+                                'file_type': doc_type
+                            })
+
+                    # Limit to prevent runaway searches
+                    if len(search_results) >= 100:
+                        break
+                if len(search_results) >= 100:
+                    break
+
+            print(f"[SMART-SEARCH] Broad search found {len(search_results)} pages, running extraction...", file=sys.stderr)
+
+            # Run the extraction
+            extraction_start = time.time()
+            extraction_result = extract_entities(
+                query=query,
+                extraction_target=query_analysis.extraction_target,
+                search_results=search_results
+            )
+            extraction_time_ms = int((time.time() - extraction_start) * 1000)
+
+            print(f"[SMART-SEARCH] Extraction complete: {extraction_result.total_unique} unique entities", file=sys.stderr)
+
+            # Build response for extraction query
+            response = {
+                'query': query,
+                'smart_search': True,
+                'is_extraction': True,
+                'extraction_target': query_analysis.extraction_target,
+                'interpretation': query_analysis.interpretation,
+                'entities': extraction_result.entities,
+                'total_unique': extraction_result.total_unique,
+                'total_mentions': extraction_result.total_mentions,
+                'documents_searched': extraction_result.documents_searched,
+                'pages_analyzed': extraction_result.pages_analyzed,
+                'llm_latency_ms': llm_latency_ms,
+                'extraction_time_ms': extraction_time_ms,
+                'cache_hit': cache_hit,
+                'query_analysis': {
+                    'intent': query_analysis.intent,
+                    'extraction_target': query_analysis.extraction_target,
+                    'search_terms': query_analysis.search_terms,
+                    'confidence': query_analysis.confidence
+                }
+            }
+
+            # Add confidence warning if low
+            if query_analysis.confidence < 0.7:
+                response['warning'] = 'Results may not be complete - query was ambiguous'
+
+            # Log the search
+            log_search(
+                project_id=project_id,
+                query_text=query,
+                search_mode='extraction',
+                query_plan=query_analysis.to_dict(),
+                interpretation=query_analysis.interpretation,
+                result_count=extraction_result.total_unique,
+                llm_latency_ms=llm_latency_ms,
+                cache_hit=cache_hit
+            )
+
+            return jsonify(response)
+
+        # Handle FINDING/SPECIFIC queries with existing logic
+        print(f"[SMART-SEARCH] Finding query, using standard search...", file=sys.stderr)
+
+        # Convert QueryAnalysis to QueryPlan for backward compatibility
+        query_plan = QueryPlan(
+            required_terms=query_analysis.required_terms,
+            optional_terms=query_analysis.optional_terms,
+            person_names=query_analysis.person_names,
+            locations=query_analysis.locations,
+            date_hints=query_analysis.date_hints,
+            interpretation=query_analysis.interpretation,
+            confidence=query_analysis.confidence
+        )
 
         # Perform the search
         results = smart_search_index(
@@ -592,7 +721,8 @@ def project_api_smart_search(project_id):
 
         # Add smart search metadata to response
         results['smart_search'] = True
-        results['interpretation'] = query_plan.interpretation
+        results['is_extraction'] = False
+        results['interpretation'] = query_analysis.interpretation
         results['query_plan'] = {
             'required_terms': query_plan.required_terms,
             'optional_terms': query_plan.optional_terms,
@@ -600,11 +730,16 @@ def project_api_smart_search(project_id):
             'locations': query_plan.locations,
             'confidence': query_plan.confidence
         }
+        results['query_analysis'] = {
+            'intent': query_analysis.intent,
+            'search_terms': query_analysis.search_terms,
+            'confidence': query_analysis.confidence
+        }
         results['llm_latency_ms'] = llm_latency_ms
         results['cache_hit'] = cache_hit
 
         # Add confidence warning if low
-        if query_plan.confidence < 0.7:
+        if query_analysis.confidence < 0.7:
             results['warning'] = 'Results may not be precise - query was ambiguous'
 
         # Log the search
@@ -612,14 +747,30 @@ def project_api_smart_search(project_id):
             project_id=project_id,
             query_text=query,
             search_mode='smart',
-            query_plan=query_plan.to_dict(),
-            interpretation=query_plan.interpretation,
+            query_plan=query_analysis.to_dict(),
+            interpretation=query_analysis.interpretation,
             result_count=results['total_matches'],
             llm_latency_ms=llm_latency_ms,
             cache_hit=cache_hit
         )
 
         return jsonify(results)
+
+    except ExtractionError as e:
+        error_message = str(e)
+        print(f"[SMART-SEARCH] EXTRACTION ERROR: {error_message}", file=sys.stderr)
+        log_search(
+            project_id=project_id,
+            query_text=query,
+            search_mode='extraction',
+            error_message=error_message,
+            llm_latency_ms=llm_latency_ms
+        )
+        return jsonify({
+            'error': 'Failed to extract information from documents. Please try again.',
+            'error_type': 'extraction_error',
+            'fallback_available': is_keyword_search_enabled()
+        }), 500
 
     except LLMTimeoutError as e:
         error_message = str(e)

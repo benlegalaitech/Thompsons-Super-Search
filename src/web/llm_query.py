@@ -34,6 +34,38 @@ class LLMValidationError(LLMError):
 
 
 @dataclass
+class QueryAnalysis:
+    """Query analysis with intent classification for smart search."""
+
+    # Intent classification
+    intent: str = "finding"  # 'extraction', 'finding', 'specific'
+    extraction_target: Optional[str] = None  # For extraction: what to extract (e.g., "company names")
+
+    # Search strategy
+    search_terms: List[str] = field(default_factory=list)  # Broad terms to find relevant docs
+    search_strategy: str = "focused"  # 'broad', 'focused', 'exhaustive'
+
+    # For backward compatibility - also include QueryPlan fields
+    required_terms: List[str] = field(default_factory=list)
+    optional_terms: List[str] = field(default_factory=list)
+    person_names: List[str] = field(default_factory=list)
+    locations: List[str] = field(default_factory=list)
+    date_hints: List[str] = field(default_factory=list)
+
+    # Metadata
+    interpretation: str = ""
+    confidence: float = 0.8
+    schema_version: str = "v2"
+
+    def to_dict(self):
+        return asdict(self)
+
+    def is_extraction_query(self) -> bool:
+        """Check if this is an extraction query that needs post-search LLM processing."""
+        return self.intent == "extraction" and self.extraction_target is not None
+
+
+@dataclass
 class QueryPlan:
     """Validated, typed query plan from LLM output."""
 
@@ -174,6 +206,74 @@ Return ONLY valid JSON with these fields. Example:
 }"""
 
 
+INTENT_CLASSIFICATION_PROMPT = """You are a legal document search assistant. Your job is to understand what the user wants and create an intelligent search strategy.
+
+IMPORTANT: First, classify the user's INTENT:
+
+1. **extraction** - User wants to LIST or EXTRACT entities from documents
+   Examples: "list all companies", "what people are mentioned", "show me all dates", "what vehicles are referenced"
+
+2. **finding** - User wants to FIND documents about a topic
+   Examples: "find documents about asbestos", "show me reports on diesel emissions", "get contracts from 2020"
+
+3. **specific** - User wants a SPECIFIC item
+   Examples: "find John Smith's testimony", "get the Ford contract", "show document ABC-123"
+
+For EXTRACTION queries:
+- Identify WHAT they want to extract (company names, people, dates, vehicles, medical conditions, etc.)
+- Generate BROAD search terms to find documents that might contain those entities
+- The system will then read those documents and extract the specific entities
+
+For FINDING queries:
+- Generate focused search terms for the topic
+- Include synonyms and related terms
+
+Return JSON with:
+{
+    "intent": "extraction" | "finding" | "specific",
+    "extraction_target": "company names" (only if intent is extraction - describe what to extract),
+    "search_terms": ["term1", "term2", ...],  // Broad terms to find relevant documents
+    "search_strategy": "broad" | "focused" | "exhaustive",
+    "required_terms": ["term1", ...],  // For backward compatibility
+    "optional_terms": ["term1", ...],  // Synonyms and related terms
+    "person_names": [],
+    "locations": [],
+    "date_hints": [],
+    "interpretation": "Plain English explanation of what user wants",
+    "confidence": 0.0-1.0
+}
+
+Example for "list all companies mentioned":
+{
+    "intent": "extraction",
+    "extraction_target": "company names",
+    "search_terms": ["company", "ltd", "limited", "inc", "corporation", "plc", "llc", "firm", "business", "organization"],
+    "search_strategy": "broad",
+    "required_terms": [],
+    "optional_terms": ["company", "ltd", "limited", "inc", "corporation", "plc", "llc"],
+    "person_names": [],
+    "locations": [],
+    "date_hints": [],
+    "interpretation": "User wants to extract and list all company names mentioned across the documents",
+    "confidence": 0.95
+}
+
+Example for "find documents about asbestos exposure":
+{
+    "intent": "finding",
+    "extraction_target": null,
+    "search_terms": ["asbestos", "exposure", "mesothelioma", "asbestosis"],
+    "search_strategy": "focused",
+    "required_terms": ["asbestos"],
+    "optional_terms": ["exposure", "mesothelioma", "asbestosis", "chrysotile", "lung disease"],
+    "person_names": [],
+    "locations": [],
+    "date_hints": [],
+    "interpretation": "User wants documents discussing asbestos exposure and related health conditions",
+    "confidence": 0.9
+}"""
+
+
 # Simple in-memory cache for query plans
 _query_cache = {}
 _cache_timestamps = {}
@@ -198,8 +298,8 @@ def _get_cached_plan(project_id: str, query: str) -> Optional[QueryPlan]:
     return None
 
 
-def _cache_plan(project_id: str, query: str, plan: QueryPlan):
-    """Cache a query plan."""
+def _cache_plan(project_id: str, query: str, plan):
+    """Cache a query plan or analysis."""
     key = _get_cache_key(project_id, query)
     _query_cache[key] = plan
     _cache_timestamps[key] = time.time()
@@ -209,6 +309,195 @@ def _cache_plan(project_id: str, query: str, plan: QueryPlan):
         oldest_key = min(_cache_timestamps, key=_cache_timestamps.get)
         del _query_cache[oldest_key]
         del _cache_timestamps[oldest_key]
+
+
+def validate_query_analysis(plan_dict: dict) -> QueryAnalysis:
+    """Validate and sanitize LLM output into a QueryAnalysis."""
+    import sys
+
+    # Extract intent
+    intent = plan_dict.get('intent', 'finding')
+    if intent not in ('extraction', 'finding', 'specific'):
+        intent = 'finding'
+
+    # Extract extraction target
+    extraction_target = plan_dict.get('extraction_target')
+    if extraction_target:
+        extraction_target = str(extraction_target)[:100]
+
+    # Extract search strategy
+    search_strategy = plan_dict.get('search_strategy', 'focused')
+    if search_strategy not in ('broad', 'focused', 'exhaustive'):
+        search_strategy = 'focused'
+
+    # Extract and sanitize search terms
+    search_terms = plan_dict.get('search_terms', [])
+    if isinstance(search_terms, str):
+        search_terms = [search_terms]
+    search_terms = [sanitize_term(t) for t in search_terms if sanitize_term(t)][:20]
+
+    # Extract and sanitize required terms
+    required = plan_dict.get('required_terms', [])
+    if isinstance(required, str):
+        required = [required]
+    required = [sanitize_term(t) for t in required if sanitize_term(t)]
+
+    # Extract and sanitize optional terms
+    optional = plan_dict.get('optional_terms', [])
+    if isinstance(optional, str):
+        optional = [optional]
+    optional = [sanitize_term(t) for t in optional if sanitize_term(t)][:15]
+
+    # Extract person names
+    person_names = plan_dict.get('person_names', [])
+    if isinstance(person_names, str):
+        person_names = [person_names]
+    person_names = [sanitize_term(n) for n in person_names if sanitize_term(n)][:5]
+
+    # Extract locations
+    locations = plan_dict.get('locations', [])
+    if isinstance(locations, str):
+        locations = [locations]
+    locations = [sanitize_term(loc) for loc in locations if sanitize_term(loc)][:5]
+
+    # Extract date hints
+    date_hints = plan_dict.get('date_hints', [])
+    if isinstance(date_hints, str):
+        date_hints = [date_hints]
+    date_hints = [str(d).strip()[:20] for d in date_hints if d][:3]
+
+    # For extraction queries, ensure we have search terms
+    if intent == 'extraction' and not search_terms:
+        # Fall back to optional terms or generic terms
+        search_terms = optional[:10] if optional else ['document', 'report', 'file']
+
+    # For finding/specific queries with no required terms, use search terms
+    if intent in ('finding', 'specific') and not required:
+        if person_names:
+            required = person_names.copy()
+        elif locations:
+            required = locations.copy()
+        elif search_terms:
+            required = search_terms[:3]
+
+    # Confidence
+    confidence = float(plan_dict.get('confidence', 0.8))
+    confidence = max(0.0, min(1.0, confidence))
+
+    # Interpretation
+    interpretation = str(plan_dict.get('interpretation', ''))[:300]
+
+    print(f"[LLM-QUERY] Validated analysis: intent={intent}, extraction_target={extraction_target}, "
+          f"search_terms={search_terms[:5]}, required={required[:3]}", file=sys.stderr)
+
+    return QueryAnalysis(
+        intent=intent,
+        extraction_target=extraction_target,
+        search_terms=search_terms,
+        search_strategy=search_strategy,
+        required_terms=required,
+        optional_terms=optional,
+        person_names=person_names,
+        locations=locations,
+        date_hints=date_hints,
+        interpretation=interpretation,
+        confidence=confidence
+    )
+
+
+def analyze_query(query: str, project_id: str = "", project_description: str = "") -> QueryAnalysis:
+    """
+    Analyze a natural language query to determine intent and search strategy.
+
+    This is the new entry point for smart search that supports extraction queries.
+
+    Args:
+        query: The user's natural language search query
+        project_id: Project identifier for caching
+        project_description: Optional description of the project/document collection
+
+    Returns:
+        QueryAnalysis with intent classification and search strategy
+
+    Raises:
+        LLMError: If the LLM call fails
+        LLMValidationError: If the LLM output can't be validated
+    """
+    import sys
+    print(f"[LLM-QUERY] analyze_query called: query='{query}'", file=sys.stderr)
+
+    # Check cache first (use different cache key prefix for analysis)
+    cache_key = f"analysis:{project_id}:{query.lower().strip()}"
+    cache_key_hash = hashlib.md5(cache_key.encode()).hexdigest()
+    if cache_key_hash in _query_cache:
+        timestamp = _cache_timestamps.get(cache_key_hash, 0)
+        if time.time() - timestamp < SMART_SEARCH_CACHE_TTL:
+            print(f"[LLM-QUERY] Analysis cache hit!", file=sys.stderr)
+            return _query_cache[cache_key_hash]
+
+    if not OPENAI_API_KEY:
+        print(f"[LLM-QUERY] ERROR: No API key configured!", file=sys.stderr)
+        raise LLMError("OpenAI API key not configured")
+
+    # Build the prompt
+    user_message = f"Search query: {query}"
+    if project_description:
+        user_message = f"Document collection: {project_description}\n\n{user_message}"
+
+    # Call OpenAI with retries
+    client = OpenAI(api_key=OPENAI_API_KEY, timeout=SMART_SEARCH_TIMEOUT)
+
+    max_retries = 2
+    last_error = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            print(f"[LLM-QUERY] Calling OpenAI for intent classification (attempt {attempt + 1})...", file=sys.stderr)
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": INTENT_CLASSIFICATION_PROMPT},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=0.3,
+                max_tokens=800,
+                response_format={"type": "json_object"}
+            )
+
+            # Parse the response
+            content = response.choices[0].message.content
+            print(f"[LLM-QUERY] Raw LLM response: {content[:500]}...", file=sys.stderr)
+            plan_dict = json.loads(content)
+
+            # Validate and create QueryAnalysis
+            analysis = validate_query_analysis(plan_dict)
+
+            # Cache the result
+            _query_cache[cache_key_hash] = analysis
+            _cache_timestamps[cache_key_hash] = time.time()
+
+            return analysis
+
+        except json.JSONDecodeError as e:
+            print(f"[LLM-QUERY] JSON decode error: {e}", file=sys.stderr)
+            last_error = LLMValidationError(f"Invalid JSON from LLM: {e}")
+        except LLMValidationError as e:
+            print(f"[LLM-QUERY] Validation error: {e}", file=sys.stderr)
+            last_error = e
+        except Exception as e:
+            print(f"[LLM-QUERY] Exception: {type(e).__name__}: {e}", file=sys.stderr)
+            if "timeout" in str(e).lower():
+                last_error = LLMTimeoutError("Search is taking longer than expected. Please try again.")
+            else:
+                last_error = LLMError(f"LLM error: {e}")
+
+        # Wait before retry
+        if attempt < max_retries:
+            print(f"[LLM-QUERY] Retrying (attempt {attempt + 2})...", file=sys.stderr)
+            time.sleep(2.0 * (attempt + 1))
+
+    print(f"[LLM-QUERY] All retries exhausted, raising: {last_error}", file=sys.stderr)
+    raise last_error
 
 
 def parse_query_with_llm(query: str, project_id: str = "", project_description: str = "") -> QueryPlan:

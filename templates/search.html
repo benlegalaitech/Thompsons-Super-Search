@@ -199,13 +199,26 @@ function performSearch() {
 }
 
 function performSmartSearch() {
+    // Show initial loading state
     resultsDiv.innerHTML = `
         <div class="loading">
             <div class="loading-spinner"></div>
-            <p>Analyzing your query...</p>
-            <p class="search-hint">Using AI to understand your search</p>
+            <p id="loadingText">Analyzing your query...</p>
+            <p class="search-hint" id="loadingHint">Using AI to understand your search</p>
         </div>
     `;
+
+    // Update loading message after a delay (indicates extraction phase)
+    const loadingTimeout = setTimeout(() => {
+        const loadingText = document.getElementById('loadingText');
+        const loadingHint = document.getElementById('loadingHint');
+        if (loadingText) {
+            loadingText.textContent = 'Extracting information from documents...';
+        }
+        if (loadingHint) {
+            loadingHint.textContent = 'Reading documents to find what you asked for';
+        }
+    }, 2500);
 
     fetch(`/p/${PROJECT_ID}/api/smart-search`, {
         method: 'POST',
@@ -220,6 +233,7 @@ function performSmartSearch() {
     })
     .then(response => response.json().then(data => ({ ok: response.ok, data })))
     .then(({ ok, data }) => {
+        clearTimeout(loadingTimeout);
         if (!ok) {
             // Handle error response
             let errorHtml = `
@@ -244,9 +258,25 @@ function performSmartSearch() {
             interpretationText.textContent = data.interpretation;
             interpretationBox.style.display = 'block';
 
-            // Show query plan details
-            if (data.query_plan) {
-                let detailsHtml = '<ul>';
+            // Show query/analysis details
+            let detailsHtml = '<ul>';
+
+            if (data.is_extraction) {
+                // Extraction query details
+                detailsHtml += `<li><strong>Query type:</strong> Extraction</li>`;
+                detailsHtml += `<li><strong>Extracting:</strong> ${escapeHtml(data.extraction_target)}</li>`;
+                if (data.query_analysis?.search_terms?.length) {
+                    detailsHtml += `<li><strong>Search terms:</strong> ${data.query_analysis.search_terms.slice(0, 8).join(', ')}</li>`;
+                }
+                detailsHtml += `<li><strong>Confidence:</strong> ${Math.round((data.query_analysis?.confidence || 0.8) * 100)}%</li>`;
+                if (data.llm_latency_ms) {
+                    detailsHtml += `<li><strong>Analysis time:</strong> ${data.llm_latency_ms}ms${data.cache_hit ? ' (cached)' : ''}</li>`;
+                }
+                if (data.extraction_time_ms) {
+                    detailsHtml += `<li><strong>Extraction time:</strong> ${data.extraction_time_ms}ms</li>`;
+                }
+            } else if (data.query_plan) {
+                // Finding query details
                 if (data.query_plan.required_terms?.length) {
                     detailsHtml += `<li><strong>Required terms:</strong> ${data.query_plan.required_terms.join(', ')}</li>`;
                 }
@@ -263,9 +293,10 @@ function performSmartSearch() {
                 if (data.llm_latency_ms) {
                     detailsHtml += `<li><strong>Query time:</strong> ${data.llm_latency_ms}ms${data.cache_hit ? ' (cached)' : ''}</li>`;
                 }
-                detailsHtml += '</ul>';
-                queryPlanDetails.innerHTML = detailsHtml;
             }
+
+            detailsHtml += '</ul>';
+            queryPlanDetails.innerHTML = detailsHtml;
         }
 
         // Show warning if present
@@ -276,9 +307,15 @@ function performSmartSearch() {
             interpretationBox.classList.remove('has-warning');
         }
 
-        renderResults(data);
+        // Render based on response type
+        if (data.is_extraction) {
+            renderExtractionResults(data);
+        } else {
+            renderResults(data);
+        }
     })
     .catch(error => {
+        clearTimeout(loadingTimeout);
         console.error('Smart search error:', error);
         resultsDiv.innerHTML = `
             <div class="search-error">
@@ -288,6 +325,52 @@ function performSmartSearch() {
             </div>
         `;
     });
+}
+
+function renderExtractionResults(data) {
+    if (!data.entities || data.entities.length === 0) {
+        resultsDiv.innerHTML = `
+            <div class="no-results">
+                <h3>No ${escapeHtml(data.extraction_target)} found</h3>
+                <p>No matching items were found in the searched documents.</p>
+                <p class="search-hint">Searched ${data.pages_analyzed || 0} pages across ${data.documents_searched || 0} documents</p>
+            </div>
+        `;
+        return;
+    }
+
+    let html = `
+        <div class="stats-bar">
+            <span>Found <span class="count">${data.total_unique}</span> unique ${escapeHtml(data.extraction_target)} (${data.total_mentions} total mentions)</span>
+            <span class="search-mode-indicator">Extraction</span>
+            <span>Searched ${data.pages_analyzed} pages</span>
+        </div>
+        <div class="extraction-results">
+    `;
+
+    for (const entity of data.entities) {
+        const docCount = entity.documents?.length || 0;
+        const sampleDocs = entity.documents?.slice(0, 3) || [];
+
+        html += `
+            <div class="extraction-item">
+                <div class="extraction-header">
+                    <span class="extraction-value">${escapeHtml(entity.value)}</span>
+                    <span class="extraction-count">${entity.mentions} mention${entity.mentions !== 1 ? 's' : ''}</span>
+                </div>
+                ${entity.first_context ? `<div class="extraction-context">"...${escapeHtml(entity.first_context)}..."</div>` : ''}
+                <div class="extraction-sources">
+                    <span class="source-label">Found in ${docCount} document${docCount !== 1 ? 's' : ''}:</span>
+                    ${sampleDocs.map(doc => `<span class="source-doc">${escapeHtml(doc)}</span>`).join(', ')}
+                    ${docCount > 3 ? `<span class="source-more">+${docCount - 3} more</span>` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    html += '</div>';
+
+    resultsDiv.innerHTML = html;
 }
 
 function performKeywordSearch() {
