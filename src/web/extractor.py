@@ -55,7 +55,7 @@ EXTRACTION_PROMPT_TEMPLATE = """You are extracting information from legal docume
 
 User's original request: "{query}"
 Extraction target: {extraction_target}
-
+{date_constraint}
 Analyze the following document text and extract all {extraction_target}.
 
 IMPORTANT INSTRUCTIONS:
@@ -64,7 +64,7 @@ IMPORTANT INSTRUCTIONS:
 3. Provide brief context (the sentence or phrase where it appears)
 4. Include the document name and page number for each extraction
 5. Be thorough - don't miss any mentions
-
+{date_instruction}
 Documents to analyze:
 ---
 {document_text}
@@ -80,6 +80,45 @@ Return your extractions as JSON:
 }}
 
 Extract ALL {extraction_target}. Be comprehensive."""
+
+
+EXTRACTION_PROMPT_TEMPLATE_WITH_DATES = """You are extracting information from legal documents.
+
+User's original request: "{query}"
+Extraction target: {extraction_target}
+Date constraint: Only extract entities associated with dates {date_constraint}
+
+Analyze the following document text and extract all {extraction_target}.
+
+CRITICAL DATE FILTERING INSTRUCTIONS:
+1. ONLY extract entities that are clearly associated with dates {date_constraint}
+2. If a person/entity is mentioned but their associated date is OUTSIDE this range, DO NOT include them
+3. Look for employment dates, document dates, event dates, or any temporal references
+4. If no date is mentioned for an entity, DO NOT include it (err on the side of caution)
+5. Include the associated date in the context field
+
+EXTRACTION INSTRUCTIONS:
+1. Extract EVERY instance of {extraction_target} that matches the date criteria
+2. Include the exact text as it appears in the document
+3. Provide brief context INCLUDING THE DATE that qualifies this extraction
+4. Include the document name and page number for each extraction
+5. Be thorough but STRICT about the date constraint
+
+Documents to analyze:
+---
+{document_text}
+---
+
+Return your extractions as JSON:
+{{
+    "extractions": [
+        {{"value": "Example Entity", "document": "filename.pdf", "page": 1, "context": "...brief context INCLUDING THE DATE that qualifies this..."}},
+        ...
+    ],
+    "notes": "Any relevant observations about the extractions and date filtering applied"
+}}
+
+Remember: ONLY include {extraction_target} associated with dates {date_constraint}."""
 
 
 def create_document_batches(search_results: List[Dict], max_chars: int = MAX_CHARS_PER_BATCH) -> List[List[Dict]]:
@@ -151,7 +190,8 @@ def extract_from_batch(
     batch: List[Dict],
     query: str,
     extraction_target: str,
-    client: OpenAI
+    client: OpenAI,
+    date_range: Optional[Dict] = None
 ) -> List[ExtractedEntity]:
     """
     Extract entities from a single batch of documents.
@@ -161,6 +201,7 @@ def extract_from_batch(
         query: Original user query
         extraction_target: What to extract (e.g., "company names")
         client: OpenAI client
+        date_range: Optional date range constraint dict with start_year, end_year, range_type
 
     Returns:
         List of ExtractedEntity objects
@@ -168,12 +209,48 @@ def extract_from_batch(
     # Format the batch
     document_text = format_batch_for_extraction(batch)
 
-    # Build the prompt
-    prompt = EXTRACTION_PROMPT_TEMPLATE.format(
-        query=query,
-        extraction_target=extraction_target,
-        document_text=document_text
-    )
+    # Build the prompt - use date-aware template if date range provided
+    if date_range and date_range.get('range_type', 'none') != 'none':
+        # Build date constraint description
+        range_type = date_range.get('range_type', 'none')
+        start_year = date_range.get('start_year')
+        end_year = date_range.get('end_year')
+
+        if range_type == 'between' and start_year and end_year:
+            date_constraint = f"between {start_year} and {end_year}"
+        elif range_type == 'after' and start_year:
+            date_constraint = f"after {start_year}"
+        elif range_type == 'before' and end_year:
+            date_constraint = f"before {end_year}"
+        elif range_type == 'exact' and start_year:
+            date_constraint = f"in {start_year}"
+        else:
+            date_constraint = ""
+
+        if date_constraint:
+            prompt = EXTRACTION_PROMPT_TEMPLATE_WITH_DATES.format(
+                query=query,
+                extraction_target=extraction_target,
+                date_constraint=date_constraint,
+                document_text=document_text
+            )
+            print(f"[EXTRACTOR] Using date-constrained extraction: {date_constraint}", file=sys.stderr)
+        else:
+            prompt = EXTRACTION_PROMPT_TEMPLATE.format(
+                query=query,
+                extraction_target=extraction_target,
+                date_constraint="",
+                date_instruction="",
+                document_text=document_text
+            )
+    else:
+        prompt = EXTRACTION_PROMPT_TEMPLATE.format(
+            query=query,
+            extraction_target=extraction_target,
+            date_constraint="",
+            date_instruction="",
+            document_text=document_text
+        )
 
     print(f"[EXTRACTOR] Sending batch of {len(batch)} results to LLM ({len(document_text)} chars)...", file=sys.stderr)
 
@@ -269,7 +346,8 @@ def extract_entities(
     query: str,
     extraction_target: str,
     search_results: List[Dict],
-    full_texts: Optional[Dict[str, Dict]] = None
+    full_texts: Optional[Dict[str, Dict]] = None,
+    date_range: Optional[Dict] = None
 ) -> ExtractionResult:
     """
     Extract entities from search results using LLM.
@@ -281,13 +359,26 @@ def extract_entities(
         extraction_target: What to extract (e.g., "company names", "people", "dates")
         search_results: List of search result dicts from the search engine
         full_texts: Optional dict mapping filename to full document text for richer extraction
+        date_range: Optional date range constraint dict with start_year, end_year, range_type
 
     Returns:
         ExtractionResult with aggregated entities
     """
     start_time = time.time()
 
-    print(f"[EXTRACTOR] Starting extraction: target='{extraction_target}', results={len(search_results)}", file=sys.stderr)
+    date_info = ""
+    if date_range and date_range.get('range_type', 'none') != 'none':
+        range_type = date_range.get('range_type')
+        start = date_range.get('start_year')
+        end = date_range.get('end_year')
+        if range_type == 'between' and start and end:
+            date_info = f" (filtering: {start}-{end})"
+        elif range_type == 'after' and start:
+            date_info = f" (filtering: after {start})"
+        elif range_type == 'before' and end:
+            date_info = f" (filtering: before {end})"
+
+    print(f"[EXTRACTOR] Starting extraction: target='{extraction_target}', results={len(search_results)}{date_info}", file=sys.stderr)
 
     if not OPENAI_API_KEY:
         raise ExtractionError("OpenAI API key not configured")
@@ -332,7 +423,7 @@ def extract_entities(
 
     for i, batch in enumerate(batches):
         print(f"[EXTRACTOR] Processing batch {i + 1}/{len(batches)}...", file=sys.stderr)
-        entities = extract_from_batch(batch, query, extraction_target, client)
+        entities = extract_from_batch(batch, query, extraction_target, client, date_range=date_range)
         all_entities.extend(entities)
 
     # Aggregate results

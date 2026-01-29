@@ -34,6 +34,39 @@ class LLMValidationError(LLMError):
 
 
 @dataclass
+class DateRange:
+    """Structured date range for filtering."""
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+    range_type: str = "between"  # 'between', 'before', 'after', 'exact', 'none'
+
+    def has_constraint(self) -> bool:
+        """Check if this date range has any constraint."""
+        return self.range_type != "none" and (self.start_year is not None or self.end_year is not None)
+
+    def to_dict(self):
+        return {
+            'start_year': self.start_year,
+            'end_year': self.end_year,
+            'range_type': self.range_type
+        }
+
+    def describe(self) -> str:
+        """Return human-readable description of the date constraint."""
+        if not self.has_constraint():
+            return ""
+        if self.range_type == "between" and self.start_year and self.end_year:
+            return f"between {self.start_year} and {self.end_year}"
+        if self.range_type == "after" and self.start_year:
+            return f"after {self.start_year}"
+        if self.range_type == "before" and self.end_year:
+            return f"before {self.end_year}"
+        if self.range_type == "exact" and self.start_year:
+            return f"in {self.start_year}"
+        return ""
+
+
+@dataclass
 class QueryAnalysis:
     """Query analysis with intent classification for smart search."""
 
@@ -52,17 +85,28 @@ class QueryAnalysis:
     locations: List[str] = field(default_factory=list)
     date_hints: List[str] = field(default_factory=list)
 
+    # Structured date range for filtering
+    date_range: Optional[DateRange] = None
+
     # Metadata
     interpretation: str = ""
     confidence: float = 0.8
     schema_version: str = "v2"
 
     def to_dict(self):
-        return asdict(self)
+        d = asdict(self)
+        # Convert DateRange to dict if present
+        if self.date_range:
+            d['date_range'] = self.date_range.to_dict()
+        return d
 
     def is_extraction_query(self) -> bool:
         """Check if this is an extraction query that needs post-search LLM processing."""
         return self.intent == "extraction" and self.extraction_target is not None
+
+    def has_date_constraint(self) -> bool:
+        """Check if there's a date range constraint."""
+        return self.date_range is not None and self.date_range.has_constraint()
 
 
 @dataclass
@@ -228,19 +272,44 @@ For FINDING queries:
 - Generate focused search terms for the topic
 - Include synonyms and related terms
 
+IMPORTANT - Date Range Extraction:
+If the user specifies a date range (e.g., "between 1970 and 1980", "before 2000", "after 1990", "in 1985"), extract it as a structured date_range object:
+- "between X and Y" → {"start_year": X, "end_year": Y, "range_type": "between"}
+- "before X" → {"start_year": null, "end_year": X, "range_type": "before"}
+- "after X" → {"start_year": X, "end_year": null, "range_type": "after"}
+- "in X" or "during X" → {"start_year": X, "end_year": X, "range_type": "exact"}
+- No date mentioned → {"start_year": null, "end_year": null, "range_type": "none"}
+
 Return JSON with:
 {
     "intent": "extraction" | "finding" | "specific",
     "extraction_target": "company names" (only if intent is extraction - describe what to extract),
-    "search_terms": ["term1", "term2", ...],  // Broad terms to find relevant documents
+    "search_terms": ["term1", "term2", ...],
     "search_strategy": "broad" | "focused" | "exhaustive",
-    "required_terms": ["term1", ...],  // For backward compatibility
-    "optional_terms": ["term1", ...],  // Synonyms and related terms
+    "required_terms": ["term1", ...],
+    "optional_terms": ["term1", ...],
     "person_names": [],
     "locations": [],
     "date_hints": [],
+    "date_range": {"start_year": null, "end_year": null, "range_type": "none"},
     "interpretation": "Plain English explanation of what user wants",
     "confidence": 0.0-1.0
+}
+
+Example for "list all welders employed by Ford between 1970 and 1980":
+{
+    "intent": "extraction",
+    "extraction_target": "welder names",
+    "search_terms": ["welder", "welding", "employed", "ford", "employee"],
+    "search_strategy": "broad",
+    "required_terms": ["welder", "ford"],
+    "optional_terms": ["welding", "employed", "employee", "worked"],
+    "person_names": [],
+    "locations": [],
+    "date_hints": ["1970", "1980"],
+    "date_range": {"start_year": 1970, "end_year": 1980, "range_type": "between"},
+    "interpretation": "User wants to extract names of all welders who worked at Ford between 1970 and 1980",
+    "confidence": 0.9
 }
 
 Example for "list all companies mentioned":
@@ -254,6 +323,7 @@ Example for "list all companies mentioned":
     "person_names": [],
     "locations": [],
     "date_hints": [],
+    "date_range": {"start_year": null, "end_year": null, "range_type": "none"},
     "interpretation": "User wants to extract and list all company names mentioned across the documents",
     "confidence": 0.95
 }
@@ -269,6 +339,7 @@ Example for "find documents about asbestos exposure":
     "person_names": [],
     "locations": [],
     "date_hints": [],
+    "date_range": {"start_year": null, "end_year": null, "range_type": "none"},
     "interpretation": "User wants documents discussing asbestos exposure and related health conditions",
     "confidence": 0.9
 }"""
@@ -366,6 +437,36 @@ def validate_query_analysis(plan_dict: dict) -> QueryAnalysis:
         date_hints = [date_hints]
     date_hints = [str(d).strip()[:20] for d in date_hints if d][:3]
 
+    # Extract structured date range
+    date_range = None
+    date_range_dict = plan_dict.get('date_range', {})
+    if date_range_dict and isinstance(date_range_dict, dict):
+        range_type = date_range_dict.get('range_type', 'none')
+        if range_type in ('between', 'before', 'after', 'exact'):
+            start_year = date_range_dict.get('start_year')
+            end_year = date_range_dict.get('end_year')
+            # Validate years are reasonable (1900-2100)
+            if start_year is not None:
+                try:
+                    start_year = int(start_year)
+                    if not (1900 <= start_year <= 2100):
+                        start_year = None
+                except (ValueError, TypeError):
+                    start_year = None
+            if end_year is not None:
+                try:
+                    end_year = int(end_year)
+                    if not (1900 <= end_year <= 2100):
+                        end_year = None
+                except (ValueError, TypeError):
+                    end_year = None
+            date_range = DateRange(
+                start_year=start_year,
+                end_year=end_year,
+                range_type=range_type
+            )
+            print(f"[LLM-QUERY] Parsed date_range: {date_range.describe()}", file=sys.stderr)
+
     # For extraction queries, ensure we have search terms
     if intent == 'extraction' and not search_terms:
         # Fall back to optional terms or generic terms
@@ -400,6 +501,7 @@ def validate_query_analysis(plan_dict: dict) -> QueryAnalysis:
         person_names=person_names,
         locations=locations,
         date_hints=date_hints,
+        date_range=date_range,
         interpretation=interpretation,
         confidence=confidence
     )

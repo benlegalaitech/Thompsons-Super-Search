@@ -654,12 +654,19 @@ def project_api_smart_search(project_id):
 
             print(f"[SMART-SEARCH] Broad search found {len(search_results)} pages, running extraction...", file=sys.stderr)
 
+            # Prepare date range for extraction if present
+            date_range_dict = None
+            if query_analysis.date_range and query_analysis.date_range.has_constraint():
+                date_range_dict = query_analysis.date_range.to_dict()
+                print(f"[SMART-SEARCH] Date constraint: {query_analysis.date_range.describe()}", file=sys.stderr)
+
             # Run the extraction
             extraction_start = time.time()
             extraction_result = extract_entities(
                 query=query,
                 extraction_target=query_analysis.extraction_target,
-                search_results=search_results
+                search_results=search_results,
+                date_range=date_range_dict
             )
             extraction_time_ms = int((time.time() - extraction_start) * 1000)
 
@@ -684,9 +691,14 @@ def project_api_smart_search(project_id):
                     'intent': query_analysis.intent,
                     'extraction_target': query_analysis.extraction_target,
                     'search_terms': query_analysis.search_terms,
-                    'confidence': query_analysis.confidence
+                    'confidence': query_analysis.confidence,
+                    'date_range': date_range_dict
                 }
             }
+
+            # Add date filtering note to interpretation if date constraint was used
+            if date_range_dict and date_range_dict.get('range_type', 'none') != 'none':
+                response['date_filter_applied'] = query_analysis.date_range.describe()
 
             # Add confidence warning if low
             if query_analysis.confidence < 0.7:
