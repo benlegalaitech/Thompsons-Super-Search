@@ -28,6 +28,7 @@
             <button class="filter-btn active" data-type="" id="filterAll">All</button>
             <button class="filter-btn" data-type="pdf" id="filterPdf"><span class="file-type-badge pdf" style="margin-right:4px;font-size:0.7em;">PDF</span>PDFs</button>
             <button class="filter-btn" data-type="excel" id="filterExcel"><span class="file-type-badge excel" style="margin-right:4px;font-size:0.7em;">XLSX</span>Excel</button>
+            <button class="filter-btn" data-type="html" id="filterHtml"><span class="file-type-badge html" style="margin-right:4px;font-size:0.7em;">HTML</span>HTML</button>
         </div>
 
         <p class="search-hint" id="searchHint">
@@ -455,6 +456,11 @@ function renderResults(data) {
             linkTitle = `Click to view email`;
             locationLabel = 'Email';
             typeBadge = '<span class="file-type-badge email">EMAIL</span>';
+        } else if (fileType === 'html') {
+            fileUrl = `/p/${PROJECT_ID}/doc-view/${result.filepath}?q=${queryForHighlight}`;
+            linkTitle = `Click to view HTML document`;
+            locationLabel = 'Document';
+            typeBadge = '<span class="file-type-badge html">HTML</span>';
         } else {
             fileUrl = `/p/${PROJECT_ID}/pdf/${result.filepath}#page=${result.page}`;
             linkTitle = `Click to open PDF at page ${result.page}`;

@@ -487,6 +487,11 @@ body {
     color: #4f46e5;
 }
 
+.file-type-badge.html {
+    background: #fef3c7;
+    color: #d97706;
+}
+
 .result-title-row {
     display: flex;
     align-items: center;

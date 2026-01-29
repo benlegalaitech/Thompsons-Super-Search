@@ -226,7 +226,7 @@ def search_index(query, project_id, page=1, per_page=20, file_type_filter=None):
 
     Smart search: Multiple words are treated as AND search.
     Use quotes for exact phrase matching: "Ford Confidential"
-    file_type_filter: None (all), 'pdf', or 'excel'
+    file_type_filter: None (all), 'pdf', 'excel', 'html', 'word', or 'email'
     """
     index, metadata = load_project_index(project_id)
 
@@ -518,7 +518,7 @@ def project_api_search(project_id):
     _get_project_or_404(project_id)
     query = request.args.get('q', '')
     page = request.args.get('page', 1, type=int)
-    file_type = request.args.get('type', '')  # '', 'pdf', or 'excel'
+    file_type = request.args.get('type', '')  # '', 'pdf', 'excel', 'html', 'word', or 'email'
 
     results = search_index(query, project_id=project_id, page=page, file_type_filter=file_type or None)
 
